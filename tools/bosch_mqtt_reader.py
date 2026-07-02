@@ -2042,13 +2042,11 @@ async def pon_cloud_loop() -> None:
                         if isinstance(it, dict) and it.get("speedInKmh") is not None:
                             payload["speed"] = it["speedInKmh"]
                             break
-            # If BLE hears the tracker, the bike is in range = home: trust that over
-            # the (possibly stale) cloud GPS, and poll the cloud only occasionally.
+            # BLE presence is the authority for home/away (seeing the tracker costs
+            # no battery). Cloud home/distance stays pure GPS — only used to show
+            # WHERE the bike is when BLE can't see it. Poll cloud slowly when home.
             ble_present = bool(_tracker_seen_ts and
                                time.time() - _tracker_seen_ts < PRESENCE_GRACE)
-            if ble_present and payload:
-                payload["home"] = True
-                payload["distance_m"] = 0
             if payload:
                 payload["in_use"] = bool(payload.get("speed", 0) > 0)
                 payload["loc_state"] = "moving" if payload["in_use"] else "parked"
@@ -2396,14 +2394,13 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const gc=$('#gpsConn');const CLp=L.cloud;
   const setPill=(bg,col,txt)=>{gc.style.display='';gc.style.background=bg;gc.style.color=col;gc.textContent=txt;};
   const GRN='rgba(67,160,71,.18)',GRNC='#43a047',AMB='rgba(251,140,0,.16)',AMBC='#fb8c00';
-  // Priority: BLE in range = home; then riding (speed) = moving (beats stale GPS);
-  // then cloud home/away. Riding must win over a stale "home" GPS fix.
-  if(L.tracker_connected)setPill(GRN,GRNC,t('gps_conn'));
-  else if(L.tracker_present===true)setPill(GRN,GRNC,t('at_home'));
+  // BLE presence is authoritative for home (seeing the tracker = home, no battery
+  // cost). If BLE can't see it, it's NOT home — show riding/away from the cloud.
+  const homeBLE=L.tracker_connected||L.tracker_present===true;
+  if(homeBLE)setPill(GRN,GRNC,t('at_home'));
   else if(CLp&&CLp.in_use)setPill(AMB,AMBC,t('cl_moving'));
-  else if(CLp&&CLp.home===true)setPill(GRN,GRNC,t('at_home'));
-  else if(CLp&&CLp.home===false)setPill(AMB,AMBC,CLp.distance_m!=null?fmtDist(CLp.distance_m):t('away'));
-  else if(L.tracker_present===false)setPill('rgba(229,57,53,.16)','#e53935',t('out_range'));
+  else if(CLp&&CLp.distance_m!=null&&CLp.distance_m>100)setPill(AMB,AMBC,fmtDist(CLp.distance_m));
+  else if(CLp||L.tracker_present===false)setPill(AMB,AMBC,t('away'));
   else gc.style.display='none';
   const mb=$('#mainBatt');
   if(L.main_battery===true){mb.textContent='🔌 '+t('mb_in');}
@@ -2415,7 +2412,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
     $('#cloudState').textContent=CLD.loc_state==='moving'?t('cl_moving'):t('cl_parked');
     const cs=$('#cloudSpeed');
     if(CLD.speed!=null){cs.style.display='';cs.style.background='rgba(3,169,244,.16)';cs.style.color='#03a9f4';cs.textContent=CLD.speed+' km/h';}else cs.style.display='none';
-    $('#cloudHome').textContent=(L.tracker_present===true)?('✓ '+t('at_home')):CLD.in_use?t('cl_moving'):CLD.home===true?('✓ '+t('at_home')):(CLD.distance_m!=null?fmtDist(CLD.distance_m):'—');
+    $('#cloudHome').textContent=homeBLE?('✓ '+t('at_home')):CLD.in_use?t('cl_moving'):(CLD.distance_m!=null&&CLD.distance_m>100?fmtDist(CLD.distance_m):t('away'));
     const mp=$('#cloudMap');
     try{
       if(!window.L){mp.style.display='none';$('#cloudUpd').textContent='map: leaflet not loaded';}
