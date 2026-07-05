@@ -54,6 +54,12 @@ then run the reader. The on-disk bond survives reboots.
 - Battery only for now. The odometer, assist mode (Eco/Tour+/Auto/Turbo) and the
   COMODULE motion sensor are still being reverse-engineered.
 
+## Support
+
+If this project is useful to you, consider buying me a coffee ☕
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/bramboe)
+
 ## Disclaimer
 
 This is an **unofficial, community-made** integration. It is **not affiliated
