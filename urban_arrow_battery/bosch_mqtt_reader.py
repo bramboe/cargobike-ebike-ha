@@ -146,6 +146,7 @@ LAST_FILE = "/data/last.json"
 _PERSIST_KEYS = (
     "battery", "last_updated", "address", "odometer", "next_service",
     "frame_number", "hub_firmware", "part_number", "model_number",
+    "max_torque", "max_power", "speed_limit",
     "module_firmware", "lock_label", "mode", "range", "bike_model", "bike_brand",
     "sku", "product_code", "product_name", "product_color", "battery_model",
     "drive_unit", "display", "components", "tracker_battery", "tracker_updated",
@@ -645,6 +646,27 @@ def parse_range(raw: bytes) -> dict[str, int] | None:
     return None
 
 
+def parse_power_profile(raw: bytes) -> dict[str, float] | None:
+    """Return the drive-unit assist map from push attr 1090/1091, or None.
+
+    Record: `10 90 c0 80 <seq> 08 <f1> 10 <torque> 18 <f3> 20 <speed×100> 28 <power>`
+    f2 = max torque (Nm), f4 = assist speed cutoff (km/h ×100), f5 = max power (W).
+    Static config (same every read); sanity-bounded so a stray match is ignored.
+    """
+    for attr in (b"\x10\x90", b"\x10\x91"):
+        i = raw.find(attr + b"\xc0\x80")
+        if i == -1:
+            continue
+        f = _pb_fields(raw[i + 5:i + 19])  # skip attr(2) + c0 80 + seq(1)
+        torque, speed, power = f.get(2), f.get(4), f.get(5)
+        if (isinstance(torque, int) and isinstance(speed, int)
+                and isinstance(power, int) and 0 < torque < 200
+                and 1000 < speed < 6000 and 100 < power < 2000):
+            return {"max_torque": torque, "speed_limit": round(speed / 100, 1),
+                    "max_power": power}
+    return None
+
+
 # ------------------------------------------------------------------- MQTT
 DEVICE = {
     "identifiers": [NODE],
@@ -772,6 +794,12 @@ def _publish_discovery(client: mqtt.Client) -> None:
     cfg("odometer", "Odometer", device_class="distance", unit_of_measurement="km",
         state_class="total_increasing", icon="mdi:counter")
     cfg("next_service", "Next service in", unit_of_measurement="km", icon="mdi:wrench-clock")
+    cfg("max_torque", "Max torque", unit_of_measurement="Nm",
+        icon="mdi:engine", entity_category="diagnostic")
+    cfg("max_power", "Max power", device_class="power",
+        unit_of_measurement="W", icon="mdi:flash", entity_category="diagnostic")
+    cfg("speed_limit", "Assist speed limit", device_class="speed",
+        unit_of_measurement="km/h", icon="mdi:speedometer", entity_category="diagnostic")
 
     # Ride mode sensor — reads MODE_TOPIC (its own retained topic so the last
     # known mode stays shown between rides).
@@ -983,7 +1011,7 @@ def _publish_discovery(client: mqtt.Client) -> None:
             client.publish(f"{DISC_PREFIX}/{dom}/{NODE}/{obj}/config", "", retain=True)
 
     # Remove sensors published by earlier versions.
-    for old in ("odometer", "battery2"):
+    for old in ("battery2",):
         client.publish(f"{DISC_PREFIX}/sensor/{NODE}/{old}/config", "", retain=True)
 
 
@@ -1182,6 +1210,10 @@ async def read_push(client: BleakClient) -> tuple[str | None, dict[str, int] | N
         pcode = _comp_string(bytes(buf), 0x182A)      # Bosch product code, PON-SMA-URBANARROW
         if pcode:
             _last["product_code"] = pcode
+        prof = parse_power_profile(bytes(buf))  # drive-unit assist map: torque/power/speed
+        if prof:
+            _last.update(prof)
+            log.info("power profile: %s", prof)
         _resolve_product()  # map sku/product_code -> friendly name + colour
         comps = parse_components(bytes(buf))  # per-subsystem firmware + date
         # eBike Lock state (read-only): the bike reports it on 0d1c when locked.
@@ -1279,7 +1311,8 @@ async def read_snapshot(mqtt_client: mqtt.Client, device) -> bool:
     if "next_service" in data:
         state["next_service"] = data["next_service"]
     for k in ("frame_number", "hub_firmware", "part_number",
-              "model_number", "module_firmware", "lock_label"):
+              "model_number", "module_firmware", "lock_label",
+              "max_torque", "max_power", "speed_limit"):
         if _last.get(k):
             state[k] = _last[k]
     mqtt_client.publish(STATE_TOPIC, json.dumps(state), retain=True)
