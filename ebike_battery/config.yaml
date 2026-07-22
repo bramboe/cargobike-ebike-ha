@@ -1,6 +1,6 @@
 name: Cargo eBike Battery
 version: "2.46.0"
-slug: urban_arrow_battery
+slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
   battery, range per mode, ride mode, odometer, next service — plus motion/anti-theft

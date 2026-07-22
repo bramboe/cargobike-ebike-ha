@@ -27,7 +27,7 @@ For Home Assistant running on hardware with a **working Bluetooth adapter**
 4. Put the bike in **pairing mode** and **start the add-on** — it pairs
    automatically (code-free "Just Works") and reads the battery from then on.
 
-See [`urban_arrow_battery/DOCS.md`](urban_arrow_battery/DOCS.md) for details.
+See [`ebike_battery/DOCS.md`](ebike_battery/DOCS.md) for details.
 
 ## Option B — Standalone reader
 
