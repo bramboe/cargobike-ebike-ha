@@ -1,4 +1,4 @@
-name: Cargo eBike Battery
+name: My eBike
 version: "2.46.0"
 slug: ebike_battery
 description: >-
@@ -16,7 +16,7 @@ init: false
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:bicycle-electric
-panel_title: Cargo eBike Battery
+panel_title: My eBike
 # Access the host BlueZ stack over D-Bus (needed for BLE bonding + reading).
 host_dbus: true
 # Read HA entity states (optional external bike-mounted motion/contact sensor).
