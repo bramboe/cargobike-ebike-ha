@@ -2,11 +2,11 @@ name: Cargo eBike Battery
 version: "2.46.0"
 slug: urban_arrow_battery
 description: >-
-  Reads a Bosch Smart System eBike (Kiox display) over Bluetooth — battery, range
-  per mode, ride mode, odometer, next service — plus motion/anti-theft alarm and
-  tracker. Publishes to Home Assistant via MQTT discovery. Tested on the Urban
-  Arrow Family Advanced Next; other Bosch Smart System bikes are untested but may
-  also work.
+  Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
+  battery, range per mode, ride mode, odometer, next service — plus motion/anti-theft
+  alarm and tracker. Publishes to Home Assistant via MQTT discovery. Developed and
+  tested on a cargo bike with the Kiox 300; other Kiox 300 / Smart System bikes
+  should work too.
 url: https://github.com/bramboe/cargobike-ebike-ha
 arch:
   - aarch64
