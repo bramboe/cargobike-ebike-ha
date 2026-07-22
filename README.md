@@ -21,7 +21,7 @@ For Home Assistant running on hardware with a **working Bluetooth adapter**
 
 1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories** and add:
    `https://github.com/bramboe/cargobike-ebike-ha`
-2. Install **Cargo eBike Battery**.
+2. Install **My eBike**.
 3. Set `bike_address` in its *Configuration* tab (find it with
    `bluetoothctl scan on` → `smart system eBike`).
 4. Put the bike in **pairing mode** and **start the add-on** — it pairs

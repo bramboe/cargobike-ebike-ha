@@ -3,7 +3,7 @@ configuration:
     name: Bluetooth-adres fiets
     description: >-
       BLE-adres van de Bosch-hub (bijv. A4:0D:BC:8A:41:D7). Leeg laten om
-      automatisch te detecteren, of kies de fiets in het Cargo eBike Battery-paneel.
+      automatisch te detecteren, of kies de fiets in het My eBike-paneel.
   bike_model:
     name: Fietsnaam / merk
     description: >-
