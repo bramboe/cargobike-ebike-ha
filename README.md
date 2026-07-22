@@ -1,14 +1,18 @@
-# Urban Arrow → Home Assistant
+# Bosch Smart System (Kiox 300) → Home Assistant
 
-Get the battery percentage of an **Urban Arrow** cargo bike (Bosch Smart System
-hub, BRC3600) into Home Assistant. The bike's battery is only served over an
-**encrypted, bonded** BLE link, which Home Assistant's own Bluetooth stack
-(local adapter or ESP proxies) cannot establish — so this uses a small reader
-that bonds with the bike via BlueZ and publishes the battery to MQTT.
+Get the battery percentage of a **Bosch Smart System** e-bike — any bike with a
+**Kiox 300** display (Smart System hub, BRC3600) — into Home Assistant. The
+battery is only served over an **encrypted, bonded** BLE link, which Home
+Assistant's own Bluetooth stack (local adapter or ESP proxies) cannot establish
+— so this uses a small reader that bonds with the bike via BlueZ and publishes
+the battery to MQTT.
 
-The bike appears in HA as a device **Urban Arrow** with a **Battery** sensor and
-a **Last updated** timestamp. The last reading stays shown until the next one
-(never "unavailable").
+The bike appears in HA as a device (named after the bike's own brand, read over
+BLE) with a **Battery** sensor and a **Last updated** timestamp. The last reading
+stays shown until the next one (never "unavailable").
+
+Developed and tested on an Urban Arrow cargo bike; other Kiox 300 / Smart System
+bikes should work the same way.
 
 ## Option A — Home Assistant Add-on (recommended)
 
