@@ -3,7 +3,7 @@ configuration:
     name: Bluetooth-adres fiets
     description: >-
       BLE-adres van de Bosch-hub (bijv. AA:BB:CC:11:22:33). Leeg laten om
-      automatisch te detecteren, of kies de fiets in het Bosch Kiox eBike-paneel.
+      automatisch te detecteren, of kies de fiets in het Cargo eBike Battery-paneel.
   bike_model:
     name: Fietsnaam / merk
     description: >-

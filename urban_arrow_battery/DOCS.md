@@ -1,4 +1,4 @@
-# Bosch Kiox eBike
+# Cargo eBike Battery
 
 Reads a **Bosch Smart System** eBike (Kiox display, BRC3600 hub) over Bluetooth
 Low Energy and publishes it to Home Assistant via MQTT discovery. Tested on the

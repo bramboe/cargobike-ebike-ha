@@ -16,8 +16,8 @@ For Home Assistant running on hardware with a **working Bluetooth adapter**
 (e.g. HA OS on a Raspberry Pi or bare-metal mini-PC).
 
 1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories** and add:
-   `https://github.com/bramboe/urban-arrow-ha`
-2. Install **Bosch Kiox eBike**.
+   `https://github.com/bramboe/cargobike-ebike-ha`
+2. Install **Cargo eBike Battery**.
 3. Set `bike_address` in its *Configuration* tab (find it with
    `bluetoothctl scan on` → `smart system eBike`).
 4. Put the bike in **pairing mode** and **start the add-on** — it pairs
