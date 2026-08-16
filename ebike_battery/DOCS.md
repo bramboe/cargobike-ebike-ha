@@ -61,6 +61,39 @@ The selected device's BLE address is published as a diagnostic sensor
 candidate with its signal strength — set **bike_address** to the right one to
 pin it.
 
+## Sensors & anti-theft
+
+The **Settings → Sensoren** card is a single, unified list of every source that can
+report movement or theft. Each row is enabled/disabled individually and shares the
+same options:
+
+- **Built-in sources** (pre-filled): *Tracker motion* (Bluetooth motion frames from
+  the COMODULE tracker) and *Tracker presence* (trips when the bike leaves BLE
+  range). Disabling *Tracker motion* also lets the add-on stop holding the BLE
+  connection while armed, which **saves the module battery**.
+- **External sensors**: add any number of your own Home Assistant `binary_sensor`s
+  (contact, vibration, motion…) that you mount on the bike. Fully independent of
+  Bluetooth.
+
+Per-sensor options:
+
+| Option | Meaning |
+|---|---|
+| **Role** | *Alarm* trips the alarm; *Motion only* shows on the dashboard but never trips. |
+| **Silent / Full alarm** | Which armed modes the sensor is active in. |
+| **Always on** | Triggers even when the alarm is disarmed (e.g. a tamper/vibration sensor). |
+| **Unavailable = tamper** (external) | An `unavailable` entity counts as active — catches a yanked-off or dead sensor. |
+| **Invert** (external) | Flip the on/off logic for sensors that report the opposite. |
+| **Double-check** (external) | The alarm only trips when **two** double-check sensors confirm together within the shared window — a backup-sensor / false-alarm guard. |
+
+Global **entry delay** (grace before a trip actually fires — time to disarm) and
+**exit delay** (ignore trips right after arming — time to ride away) apply to all
+sensors.
+
+> Power user (route B): the motion, presence and alarm entities are published over
+> MQTT, so you can instead point [Alarmo](https://github.com/nielsfaber/alarmo) at
+> them and use its full alarm panel (user codes, areas, notification actions).
+
 ## Options
 
 | Option | Description |
