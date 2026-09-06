@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.58.0"
+version: "2.59.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
@@ -25,8 +25,6 @@ homeassistant_api: true
 services:
   - mqtt:want
 options:
-  bike_address: ""
-  bike_model: ""
   cooldown: 120
   comodule_address: ""
   motion_off_delay: 12
@@ -49,10 +47,8 @@ options:
   mqtt_user: ""
   mqtt_pass: ""
 schema:
-  # Leave bike_address empty to auto-detect the hub (advertised "smart system eBike").
-  bike_address: str?
-  # Display name shown in the panel hero. Empty = "Urban Arrow Connected".
-  bike_model: str?
+  # The bike is added via the panel GUI (scan → add), not here. Its selection and
+  # name are stored by the add-on; there is no bike address/name option anymore.
   cooldown: int
   # COMODULE/URBANARROW motion tracker. Empty = auto-detect by name. Seconds of
   # stillness before motion clears.
