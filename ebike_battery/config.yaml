@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.57.0"
+version: "2.58.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
