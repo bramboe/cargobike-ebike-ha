@@ -12,6 +12,7 @@ USAGE:
 """
 import getpass
 import json
+import re
 import ssl
 import sys
 import urllib.parse
@@ -184,7 +185,40 @@ def main() -> int:
     print("   >>> MATCH:", hit or "none equal the BLE hub serial "
           "(need another shared id, e.g. frame number)")
 
-    print("\nDone. Paste sections 1-2 statuses + all of section 5 back (values are "
+    # 6. What does the API expose about motion / theft / alarm?
+    print("\n== 6. motion / theft / alarm surface ==")
+    hits = []
+
+    def _walk(o, path=""):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                p = path + "." + k
+                if re.search(r"theft|alarm|lock|motion|geofence|arm|posit|tamper",
+                             k, re.I):
+                    hits.append(p + ("={...}" if isinstance(v, (dict, list))
+                                     else "=" + _mask(v)))
+                _walk(v, p)
+        elif isinstance(o, list):
+            for it in o[:3]:
+                _walk(it, path + "[]")
+    if isinstance(bike_obj, dict):
+        _walk(bike_obj, "bike")
+    print("   profile fields matching motion/theft/alarm:", hits or "none")
+    if bike_id:
+        s, body = _req("GET", f"{API}{BIKEPASS}?bikeId={bike_id}", headers=hdr)
+        try:
+            bp = json.loads(body)
+        except Exception:  # noqa: BLE001
+            bp = {}
+        logs = (bp.get("theftReportLogs") if isinstance(bp, dict) else None) or []
+        print("   theftReportLogs count:", len(logs),
+              "(the eBike Alarm theft-case log, with GPS location)")
+        if logs:
+            e = max(logs, key=lambda x: str(x.get("createdAt") or ""))
+            print("   newest theft entry keys:", sorted(e)[:15])
+            print("   newest theft entry:", json.dumps(e)[:400])
+
+    print("\nDone. Paste sections 1-2 statuses + all of section 5-6 back (values are "
           "masked, so it's safe).")
     return 0
 
