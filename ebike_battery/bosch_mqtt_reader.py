@@ -2249,21 +2249,39 @@ async def pon_cloud_loop() -> None:
         return
     st = {"access": None, "exp": 0.0, "bike": PON_BIKE_ID or None}
 
-    async def ensure_token() -> bool:
-        if st["access"] and time.time() < st["exp"] - 60:
-            return True
+    async def _refresh(tok: str) -> bool:
         s, js = await _http_json("POST", PON_TOKEN_URL, data={
             "grant_type": "refresh_token", "client_id": PON_CLIENT_ID,
-            "refresh_token": _pon_refresh})
+            "refresh_token": tok})
         if s == 200 and js and js.get("access_token"):
             st["access"] = js["access_token"]
             st["exp"] = time.time() + float(js.get("expires_in", 3600))
-            rt = js.get("refresh_token")
-            if rt and rt != _pon_refresh:        # Auth0 rotates refresh tokens
+            rt = js.get("refresh_token") or tok  # Auth0 rotates refresh tokens
+            if rt != _pon_refresh:
                 globals()["_pon_refresh"] = rt
                 _pon_save_refresh(rt)
             return True
-        log.warning("PON token refresh failed (status %s)", s)
+        return s  # non-True: the HTTP status (or None) for logging
+
+    async def ensure_token(prefer_option: bool = False) -> bool:
+        if not prefer_option and st["access"] and time.time() < st["exp"] - 60:
+            return True
+        opt = (os.getenv("PON_REFRESH") or "").strip()
+        # Normally use the persisted (rotated) token; when the API rejected it,
+        # prefer the freshly-configured option token (a re-paste must win over a
+        # stale /data/pon.json). Dedup so we never replay the same token.
+        order = [opt, _pon_refresh] if prefer_option else [_pon_refresh, opt]
+        seen, last = set(), None
+        for tok in order:
+            tok = (tok or "").strip()
+            if not tok or tok in seen:
+                continue
+            seen.add(tok)
+            r = await _refresh(tok)
+            if r is True:
+                return True
+            last = r
+        log.warning("PON token refresh failed (status %s)", last)
         return False
 
     async def api(path: str):
@@ -2271,11 +2289,13 @@ async def pon_cloud_loop() -> None:
             return None
         hdr = {"Authorization": "Bearer " + st["access"], "Accept": "application/json"}
         s, js = await _http_json("GET", PON_BASE + path, headers=hdr)
-        if s == 401:                              # token died early — refresh once
+        if s in (401, 403):        # token rejected — retry with the option token
             st["access"] = None
-            if await ensure_token():
+            if await ensure_token(prefer_option=True):
                 hdr["Authorization"] = "Bearer " + st["access"]
                 s, js = await _http_json("GET", PON_BASE + path, headers=hdr)
+        if s != 200:
+            log.warning("PON api %s -> status %s", path, s)
         return js if s == 200 else None
 
     log.info("PON cloud poll starting (every %ss)", int(PON_POLL))
