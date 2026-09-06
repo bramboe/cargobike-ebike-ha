@@ -39,6 +39,8 @@ REDIRECT_URI = "http://localhost:8888/callback"
 PORT = 8888
 # offline_access is what makes Auth0 return a refresh token.
 SCOPE = "openid offline_access"
+# PON's Auth0 needs this API audience or the access token is login-only (API 401s).
+AUDIENCE = "https://data-act.connected.pon.bike/"
 
 _code_holder = {}
 
@@ -87,6 +89,8 @@ def main() -> int:
     if not client_id:
         print("No Client-ID given.", file=sys.stderr)
         return 2
+    if audience is None:
+        audience = AUDIENCE          # default to the known PON Data Act audience
 
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(
