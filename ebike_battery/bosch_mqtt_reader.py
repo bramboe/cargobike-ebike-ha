@@ -1054,23 +1054,29 @@ def _publish_discovery(client: mqtt.Client) -> None:
          state_class="measurement", icon="mdi:battery-heart-variant")
     bcfg("battery_cycles", "Battery charge cycles", state_class="total_increasing",
          icon="mdi:battery-sync")
-    bcfg("battery_measured_wh", "Battery measured capacity", device_class="energy_storage",
-         unit_of_measurement="Wh", icon="mdi:battery")
-    bcfg("battery_nominal_wh", "Battery nominal capacity", device_class="energy_storage",
-         unit_of_measurement="Wh", entity_category="diagnostic", icon="mdi:battery-outline")
+    bcfg("battery_lifetime_wh", "Battery energy delivered", device_class="energy",
+         unit_of_measurement="Wh", state_class="total_increasing", icon="mdi:battery-charging")
+    bcfg("battery_model", "Battery model", entity_category="diagnostic",
+         icon="mdi:battery")
     bcfg("motor_hours", "Motor hours", unit_of_measurement="h",
          state_class="total_increasing", icon="mdi:engine")
-    bcfg("next_service_days", "Next service in", unit_of_measurement="d",
-         icon="mdi:calendar-clock")
-    bcfg("software_update", "Software update available", icon="mdi:cloud-download")
-    bcfg("last_service_date", "Last service", device_class="timestamp",
+    bcfg("power_on_hours", "System power-on", unit_of_measurement="h",
+         state_class="total_increasing", entity_category="diagnostic", icon="mdi:power")
+    bcfg("next_service_km", "Next service in", unit_of_measurement="km",
+         icon="mdi:wrench-clock")
+    bcfg("last_software_update", "Last software update", device_class="timestamp",
          entity_category="diagnostic")
-    bcfg("last_service_odometer", "Last service odometer", device_class="distance",
-         unit_of_measurement="km", entity_category="diagnostic", icon="mdi:counter")
-    bcfg("last_service_dealer", "Last service dealer", entity_category="diagnostic",
-         icon="mdi:store")
+    bcfg("software_version", "Software version", entity_category="diagnostic",
+         icon="mdi:chip")
     bcfg("capacity_tested_wh", "Capacity tester result", device_class="energy_storage",
          unit_of_measurement="Wh", entity_category="diagnostic", icon="mdi:battery-check")
+
+    # Clear retained discovery for sensors from the first 2.48.0 cut whose Bosch
+    # field names turned out not to exist (so HA drops the orphaned entities).
+    for _gone in ("battery_measured_wh", "battery_nominal_wh", "next_service_days",
+                  "software_update", "last_service_date", "last_service_odometer",
+                  "last_service_dealer"):
+        client.publish(f"{DISC_PREFIX}/sensor/{NODE}/{_gone}/config", "", retain=True)
 
     publish_alarm_discovery(client)
 
@@ -2360,91 +2366,65 @@ def _bnum(v):
         return None
 
 
-def _newest(records, rtype):
-    """Newest service record of a given type, by createdAt/updatedAt."""
-    hits = [r for r in (records or [])
-            if isinstance(r, dict) and r.get("type") == rtype]
-    if not hits:
-        return None
-    return max(hits, key=lambda r: str(r.get("createdAt") or r.get("updatedAt") or ""))
+def _nested_num(v, key):
+    """A numeric field Bosch ships either as a scalar or nested under `key`
+    (the smart-system profile uses e.g. powerOnTime={'total':..,'withMotorSupport':..}
+    and chargeCycles={'total':..,'onBike':..,'offBike':..})."""
+    if isinstance(v, dict):
+        return _bnum(v.get(key))
+    return _bnum(v)
 
 
 def _parse_service_records(js: dict, battery_serial: "str | None") -> dict:
-    """Pull battery health + service fields from a smart-system service-records
-    response. Every field is optional — Bosch omits what a dealer never measured."""
+    """Battery State-of-Health (only if a dealer ran a capacity test → a
+    BATTERY_MEASUREMENT record) plus the newest applied software update. The
+    smart-system service book otherwise holds only SOFTWARE_UPDATE records; the
+    'next service' target lives on the bike's serviceDue, parsed in the loop."""
     out: dict = {}
-    records = (js.get("serviceRecords") or js.get("records")
-               or (js if isinstance(js, list) else [])) if isinstance(js, dict) else js
+    records = js.get("serviceRecords") if isinstance(js, dict) else js
     if isinstance(records, dict):
-        records = records.get("items") or []
+        records = records.get("items") or records.get("records") or []
     records = records or []
 
+    def _created(r):
+        return str((r.get("attributes") or {}).get("createdAt")
+                   or r.get("createdAt") or "")
+
     # Battery State-of-Health — newest BATTERY_MEASUREMENT for our pack serial.
-    meas = None
     cand = [r for r in records if isinstance(r, dict)
             and r.get("type") == "BATTERY_MEASUREMENT"]
+    meas = None
     if battery_serial:
-        for r in cand:
-            b = (r.get("attributes") or {}).get("battery") or r.get("battery") or {}
-            if b.get("serialNumber") == battery_serial:
-                meas = r if meas is None else max(meas, r,
-                    key=lambda x: str(x.get("createdAt") or ""))
+        serial_hits = [r for r in cand
+                       if ((r.get("attributes") or {}).get("battery")
+                           or {}).get("serialNumber") == battery_serial]
+        if serial_hits:
+            meas = max(serial_hits, key=_created)
     if meas is None and cand:
-        meas = max(cand, key=lambda x: str(x.get("createdAt") or ""))
+        meas = max(cand, key=_created)
     if meas:
-        m = (meas.get("attributes") or {}).get("measurement") or meas.get("measurement") or meas
+        a = meas.get("attributes") or {}
+        m = a.get("measurement") or a
         soh = _bnum(m.get("measuredCapacityPercentage"))
         if soh is not None:
             out["battery_soh"] = round(soh, 1)
         for k, dst in (("measuredEnergyCapacity", "battery_measured_wh"),
-                       ("nominalEnergyCapacity", "battery_nominal_wh"),
-                       ("fullChargeCycles", "battery_cycles")):
+                       ("nominalEnergyCapacity", "battery_nominal_wh")):
             v = _bnum(m.get(k))
             if v is not None:
                 out[dst] = round(v)
 
-    # Next service — days + meters remaining (we already surface km elsewhere too).
-    nsi = None
-    for r in records:
-        if not isinstance(r, dict):
-            continue
-        a = r.get("attributes") or r
-        if a.get("daysNextService") is not None or a.get("metersNextService") is not None:
-            nsi = a
-            break
-    if nsi:
-        d = _bnum(nsi.get("daysNextService"))
-        if d is not None:
-            out["next_service_days"] = round(d)
-        km = _bnum(nsi.get("metersNextService"))
-        if km is not None:
-            out["next_service_km"] = round(km / 1000)
-
-    # Software update available (any customer component flags one).
-    comps = []
-    for r in records:
-        if isinstance(r, dict):
-            cc = (r.get("attributes") or {}).get("customerComponents") \
-                or r.get("customerComponents")
-            if isinstance(cc, list):
-                comps = cc
-                break
-    if comps:
-        out["software_update"] = "Yes" if any(
-            c.get("softwareUpdateAvailable") is True for c in comps
-            if isinstance(c, dict)) else "No"
-
-    # Last completed service — date / dealer / odometer.
-    last = _newest(records, "SERVICE") or _newest(records, "MAINTENANCE")
-    if last:
-        a = last.get("attributes") or last
-        out["last_service_date"] = last.get("createdAt") or a.get("date")
-        odo = _bnum(a.get("odometerValue"))
-        if odo is not None:
-            out["last_service_odometer"] = round(odo / 1000) if odo > 100000 else round(odo)
-        dealer = a.get("dealerName") or (a.get("dealer") or {}).get("name")
-        if dealer:
-            out["last_service_dealer"] = dealer
+    # Newest applied software update — date + tool version.
+    sw = [r for r in records if isinstance(r, dict)
+          and r.get("type") == "SOFTWARE_UPDATE"]
+    if sw:
+        newest = max(sw, key=_created)
+        a = newest.get("attributes") or {}
+        if a.get("createdAt"):
+            out["last_software_update"] = a["createdAt"]
+        ver = (a.get("details") or {}).get("toolVersion")
+        if ver:
+            out["software_version"] = ver
     return out
 
 
@@ -2518,25 +2498,54 @@ async def bosch_cloud_loop() -> None:
             bikes = (bikes_js.get("bikes") if isinstance(bikes_js, dict) else bikes_js) or []
             bike = bikes[0] if bikes else None
             if bike:
-                bike_id = bike.get("bikeId") or bike.get("id")
+                bike_id = bike.get("id") or bike.get("bikeId")
                 drive = bike.get("driveUnit") or {}
-                batt = bike.get("battery") or (bike.get("batteries") or [{}])[0] \
-                    if bike.get("batteries") else bike.get("battery") or {}
-                batt_serial = (batt or {}).get("serialNumber")
-                batt_part = (batt or {}).get("partNumber")
+                batts = bike.get("batteries") or (
+                    [bike["battery"]] if isinstance(bike.get("battery"), dict) else [])
+                batt = batts[0] if batts else {}
+                batt_serial = batt.get("serialNumber")
+                batt_part = batt.get("partNumber")
+
                 if drive.get("productName"):
                     payload["drive_unit"] = drive["productName"]
-                if _bnum(drive.get("operatingHours")) is not None:
-                    payload["motor_hours"] = round(_bnum(drive.get("operatingHours")), 1)
+                if batt.get("productName"):
+                    payload["battery_model"] = batt["productName"]
+
+                # powerOnTime {'total','withMotorSupport'} in hours — withMotorSupport
+                # is the true motor-running time; total is system power-on.
+                assist = _nested_num(drive.get("powerOnTime"), "withMotorSupport")
+                if assist is not None:
+                    payload["motor_hours"] = round(assist, 1)
+                total_on = _nested_num(drive.get("powerOnTime"), "total")
+                if total_on is not None:
+                    payload["power_on_hours"] = round(total_on, 1)
+
+                # chargeCycles {'total','onBike','offBike'} — total is the headline.
+                cyc = _nested_num(batt.get("chargeCycles"), "total")
+                if cyc is not None:
+                    payload["battery_cycles"] = round(cyc, 1)
+                lwh = _bnum(batt.get("deliveredWhOverLifetime"))
+                if lwh is not None:
+                    payload["battery_lifetime_wh"] = round(lwh)
+
+                # serviceDue.odometer and driveUnit.odometer are both in metres →
+                # remaining km to the next service.
+                due = _bnum((bike.get("serviceDue") or {}).get("odometer"))
+                odo = _bnum(drive.get("odometer"))
+                if due is not None and odo is not None:
+                    payload["next_service_km"] = round((due - odo) / 1000)
+                elif due is not None:
+                    payload["next_service_km"] = round(due / 1000)
 
                 if bike_id:
                     svc = await api(f"{BOSCH_SERVICE_EP}?bikeId={bike_id}")
                     if svc:
                         payload.update(_parse_service_records(svc, batt_serial))
                     bp = await api(f"{BOSCH_BIKEPASS_EP}?bikeId={bike_id}")
-                    if isinstance(bp, dict):
-                        fn = bp.get("frameNumber") or (bp.get("bikePass") or {}).get(
-                            "frameNumber")
+                    passes = (bp.get("bikePasses") if isinstance(bp, dict) else None) or []
+                    if passes:
+                        fn = passes[0].get("frameNumber") \
+                            or passes[0].get("frameNumberNormalized")
                         if fn:
                             payload["frame_number_bosch"] = fn
 
