@@ -2615,6 +2615,21 @@ async def bosch_cloud_loop() -> None:
                             or passes[0].get("frameNumberNormalized")
                         if fn:
                             payload["frame_number_bosch"] = fn
+                    # Read-only visibility into the Bosch eBike Alarm theft-case log
+                    # (never a report/write — just surfacing what Bosch recorded).
+                    tlogs = (bp.get("theftReportLogs")
+                             if isinstance(bp, dict) else None) or []
+                    log.info("Bosch theft log: %d entr%s", len(tlogs),
+                             "y" if len(tlogs) == 1 else "ies")
+                    if tlogs:
+                        newest = max(tlogs, key=lambda e: str(e.get("createdAt") or ""))
+                        loc = newest.get("location") or {}
+                        log.info("Bosch theft newest: created=%s entered=%s "
+                                 "lat=%s lon=%s addr=%s detected=%s",
+                                 newest.get("createdAt"),
+                                 newest.get("theftCaseEnteredAt"),
+                                 loc.get("latitude"), loc.get("longitude"),
+                                 loc.get("address"), loc.get("detectedAt"))
 
                 # Diagnosis Field Data (dealer-gated) — capacity tester, path-discovered.
                 if batt_part and batt_serial:
