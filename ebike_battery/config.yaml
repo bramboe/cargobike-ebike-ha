@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.47.0"
+version: "2.48.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
@@ -39,6 +39,8 @@ options:
   pon_refresh_token: ""
   pon_bike_id: ""
   pon_poll: 120
+  bosch_client_id: ""
+  bosch_refresh_token: ""
   probe_frames: false
   adv_probe: false
   hub_probe: false
@@ -74,6 +76,13 @@ schema:
   pon_refresh_token: str?
   pon_bike_id: str?
   pon_poll: int?
+  # Optional Bosch SingleKey ID CLOUD poll (additive, no BLE): dealer-grade battery
+  # health & service data straight from Bosch's Data Act API (api.bosch-ebike.com).
+  # Register a Data Act app at portal.bosch-ebike.com/data-act/app for a client_id,
+  # then run tools/bosch_login.py once to get a refresh_token. Primary source for
+  # battery SoH / cycles / next service; PON stays the GPS/live fallback.
+  bosch_client_id: str?
+  bosch_refresh_token: str?
   # TEMPORARY diagnostic: log distinct COMODULE 155e status frames to find which
   # byte flips when the main battery is removed/inserted. Keeps the tracker
   # connected (no need to arm). Turn off again after the test.

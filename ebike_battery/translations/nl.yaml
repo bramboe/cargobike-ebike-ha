@@ -70,6 +70,17 @@ configuration:
   pon_poll:
     name: PON-cloud — poll-interval (seconden)
     description: Aantal seconden tussen cloud-polls (standaard 120).
+  bosch_client_id:
+    name: Bosch-cloud — application key (client ID)
+    description: >-
+      Optionele cloud-poll (additief, zonder Bluetooth). De Client-ID van je app in het
+      Bosch Data Act-portal (portal.bosch-ebike.com/data-act/app). Primaire bron voor
+      accugezondheid, laadcycli en servicedata. Leeg laten om uit te schakelen.
+  bosch_refresh_token:
+    name: Bosch-cloud — refresh token
+    description: >-
+      OAuth refresh-token uit tools/bosch_login.py (eenmalige SingleKey ID-login). De
+      add-on haalt daarmee automatisch access-tokens op; geroteerde tokens worden hergebruikt.
   probe_frames:
     name: COMODULE-probe (ontwikkelaar)
     description: >-

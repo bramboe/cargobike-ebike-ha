@@ -20,6 +20,10 @@ export PON_REFRESH="$(bashio::config 'pon_refresh_token')"
 export PON_BIKE_ID="$(bashio::config 'pon_bike_id')"
 export PON_POLL="$(bashio::config 'pon_poll')"
 
+# Optional Bosch SingleKey ID cloud poll (additive, no BLE): battery health + service.
+export BOSCH_CLIENT_ID="$(bashio::config 'bosch_client_id')"
+export BOSCH_REFRESH="$(bashio::config 'bosch_refresh_token')"
+
 # MQTT: use the configured override, else the Home Assistant MQTT service.
 if bashio::config.has_value 'mqtt_host'; then
     export MQTT_HOST="$(bashio::config 'mqtt_host')"
