@@ -2333,6 +2333,44 @@ async def _http_json(method: str, url: str, *, headers=None, data=None):
         return None, None
 
 
+_pon_dumped = False
+
+
+def _mask_val(v) -> str:
+    s = str(v)
+    return (s[:4] + "…" + s[-3:]) if len(s) > 9 else s
+
+
+def _pon_dump_module(binfo, entry) -> None:
+    """One-time read-only log of any GPS-module identifiers PON exposes
+    (mac/imei/serial/device/module fields) and whether any matches the BLE
+    tracker — to see if the tracker can be auto-recognised like the bike."""
+    ble = {_norm_serial(_last.get("module_mac")), _norm_serial(_last.get("tracker_addr"))}
+    ble.discard("")
+    hits: list = []
+
+    def walk(o, path=""):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                p = f"{path}.{k}"
+                if isinstance(v, (dict, list)):
+                    walk(v, p)
+                elif v not in (None, "") and re.search(
+                        r"mac|imei|serial|device|module|iot|iccid|tracker|"
+                        r"hardware|firmware|deveui|euid|\bid\b", k, re.I):
+                    m = " <== MATCHES BLE tracker" if _norm_serial(v) in ble else ""
+                    hits.append(f"{p}={_mask_val(v)}{m}")
+        elif isinstance(o, list):
+            for it in o[:2]:
+                walk(it, path + "[]")
+
+    walk(binfo, "info")
+    walk(entry, "state")
+    log.info("PON module ids (BLE tracker=%s): %s",
+             _mask_val(_last.get("module_mac") or "?"),
+             " | ".join(hits) if hits else "none found")
+
+
 async def pon_cloud_loop() -> None:
     """Additive PON cloud poll (no BLE, no module-battery cost): publish GPS location,
     module charge and speed/in-use from the Connected Bike REST API to HA. Runs only
@@ -2465,6 +2503,12 @@ async def pon_cloud_loop() -> None:
                     _record_charge(iot["moduleCharge"])  # cloud charge → battery trend
                 if entry.get("odometer") is not None:
                     payload["odometer"] = entry["odometer"]
+                if not _pon_dumped:          # one-time read-only module-id probe
+                    globals()["_pon_dumped"] = True
+                    try:
+                        _pon_dump_module(await api("/v1/bikes/info"), entry)
+                    except Exception as err:  # noqa: BLE001
+                        log.debug("pon module dump: %s", err)
             if st["bike"]:
                 frm = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 900))
                 to = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
