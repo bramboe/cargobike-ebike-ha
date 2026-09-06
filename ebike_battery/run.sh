@@ -1,12 +1,10 @@
 #!/usr/bin/with-contenv bashio
 # shellcheck shell=bash
 
-export BIKE_ADDRESS="$(bashio::config 'bike_address')"
-if bashio::config.has_value 'bike_model'; then
-    export BIKE_MODEL="$(bashio::config 'bike_model')"
-else
-    export BIKE_MODEL=""
-fi
+# The bike is added via the panel GUI (scan → add); its selection/name persist in
+# /data. No bike_address/bike_model options anymore — empty = auto-detect.
+export BIKE_ADDRESS=""
+export BIKE_MODEL=""
 export COOLDOWN="$(bashio::config 'cooldown')"
 
 # Optional remote ESPHome Bluetooth proxy for the presence layer.

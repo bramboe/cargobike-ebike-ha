@@ -2883,6 +2883,11 @@ body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:var(--bg
 .hlbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
 .hstats .vr{width:1px;height:42px;background:var(--line)}
 @media(max-width:520px){.hstats .vr{display:none}.hero{padding:26px 16px 20px}.htitle{font-size:19px}.pct{font-size:28px}.pct small{font-size:15px}.range{font-size:24px}.range small{font-size:13px}}
+.biketile{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;margin-top:10px}
+.biketile.match{border-color:#43a047;background:rgba(67,160,71,.07)}
+.btimg{width:66px;height:auto;flex:0 0 auto}
+.btinfo{flex:1;min-width:0}
+.btadd{flex:0 0 auto;padding:9px 16px;font-size:14px}
 .segs{display:flex;gap:4px;align-items:flex-end;height:30px}
 .segs i{width:8px;border-radius:3px;display:block}
 .segs i:nth-child(1){height:13px}.segs i:nth-child(2){height:17px}.segs i:nth-child(3){height:21px}
@@ -2942,10 +2947,11 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
   <button class=tab id=tabSet data-i18n=tab_set onclick="tab('set')">Instellingen</button>
 </div>
 <div class=devbar id=devBar data-i18n=devmode style="display:none"></div>
-<div class="card hidden" id=onboard style="text-align:center;padding:40px 24px">
-  <div class=htitle data-i18n=ob_title>Nog geen fiets</div>
-  <div class=sub data-i18n=ob_body>Ga naar Instellingen, scan en koppel je fiets om te beginnen.</div>
-  <div style="margin-top:16px"><button onclick="tab('set')" data-i18n=ob_btn>Naar Instellingen</button></div>
+<div class="card hidden" id=onboard style="padding:28px 24px">
+  <div class=htitle data-i18n=ob_title style="text-align:center">Voeg je fiets toe</div>
+  <div class=sub data-i18n=ob_body style="text-align:center;margin-top:6px">Zet het display van de fiets aan (en zet 'm in koppelmodus) — dan verschijnt 'ie hieronder.</div>
+  <div id=obFound style="margin-top:18px"></div>
+  <div style="text-align:center;margin-top:12px"><button class=sec data-i18n=ob_scan onclick="scan('bike','#obFound')">Zoek fiets</button></div>
 </div>
 
 <section id=dash class=dash>
@@ -3014,21 +3020,30 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 
 <section id=set class='set hidden'>
   <div class=card>
-    <h2 data-i18n=su_bike_h>1. Fiets</h2><p class=muted data-i18n=su_bike_p>Zet het display van de fiets aan en scan.</p>
-    <p class=muted data-i18n=acc_hint style="font-size:12px"></p>
-    <button data-i18n=scan_bikes onclick="scan('bike')">Scan fietsen</button><div id=bikes></div>
-    <div id=bikeActions class=hidden><button data-i18n=select_bike onclick="selectBike()">Selecteer deze fiets</button></div>
-    <div id=pairBox class=hidden style='margin-top:8px'>
-      <p class=muted data-i18n=su_pair_p>Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:</p>
-      <button id=pairBtn data-i18n=pair_btn onclick="pair()">Koppel (pair)</button><span id=pairMsg></span></div>
-    <div id=pairedCard class=hidden style='margin-top:12px;text-align:center;border-top:1px solid var(--line);padding-top:14px'>
-      <div class=ok data-i18n=paired_ok>Gekoppeld ✓</div>
-      <img src=bike.png style='width:120px;height:auto;margin:8px auto'>
-      <div class=htitle style='font-size:16px' id=pairedModel>—</div>
-      <div class=sub id=pairedMac></div></div>
-    <div id=removeBox class=hidden style='margin-top:14px;border-top:1px solid var(--line);padding-top:14px'>
-      <button class=sec id=removeBtn data-i18n=remove_bike onclick="removeBike()">Verwijder fiets</button>
-      <span id=removeMsg class=muted></span></div>
+    <h2 data-i18n=su_bike_h>1. Fiets</h2>
+    <!-- Added-bike tile (shown once a bike is added) -->
+    <div id=addedBike class=hidden>
+      <div class="biketile match">
+        <img src=bike.png class=btimg>
+        <div class=btinfo>
+          <b id=addedName style="display:block">—</b>
+          <div class=muted id=addedMac style="font-size:12px"></div>
+          <div id=addedConn style="font-size:12px;margin-top:2px"></div>
+        </div>
+        <button class=sec id=removeBtn onclick="removeBike()" data-i18n=remove_bike>Verwijderen</button>
+      </div>
+      <div id=pairArea class=hidden style="margin-top:10px">
+        <p class=muted style="font-size:13px" data-i18n=su_pair_p>Zet de fiets in koppelmodus (display → nieuw apparaat), klik dan:</p>
+        <button id=pairBtn data-i18n=pair_btn onclick="pair()">Koppel (pair)</button><span id=pairMsg></span></div>
+      <span id=removeMsg class=muted></span>
+      <p class=muted style="font-size:12px;margin-top:12px"><a href=# id=replaceLink onclick="showScan();return false" data-i18n=replace_bike>Andere fiets koppelen</a></p>
+    </div>
+    <!-- Add flow (scan → tiles with an add button) -->
+    <div id=addFlow>
+      <p class=muted data-i18n=su_bike_p>Zet het display van de fiets aan en zoek 'm.</p>
+      <p class=muted data-i18n=acc_hint style="font-size:12px"></p>
+      <button data-i18n=scan_bikes onclick="scan('bike','#bikes')">Zoek fietsen</button><div id=bikes></div>
+    </div>
   </div>
   <div class=card>
     <h2 data-i18n=su_tracker_h>2. GPS-tracker (anti-diefstal, optioneel)</h2>
@@ -3057,8 +3072,8 @@ const $=s=>document.querySelector(s);
 const api=async(p,o)=>(await fetch(p,o)).json();
 const post=(p,b)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 const LANG=(navigator.language||'en').toLowerCase().startsWith('nl')?'nl':'en';
-const T={nl:{tab_dash:'Dashboard',tab_more:'Meer info',tab_set:'Instellingen',components:'Componenten',about:'Over deze add-on',about_p:'Leest je Bosch Smart System eBike (Kiox) via Bluetooth uit en publiceert batterij, bereik, modus, km-stand, beurt, beweging/alarm en tracker naar Home Assistant.',about_repo:'Broncode op GitHub',c_drive:'Aandrijving',c_batt:'Accu',c_disp:'Display',c_hub:'Hub',mode:'Rijmodus',maint:'Onderhoud',maint_sub:'tot de volgende servicebeurt',security:'Beveiliging',ranges:'Geschat bereik per stand',mileage:'Kilometerstand',tech:'Technische info',tech_kiox:'Kiox (Bosch-hub)',tech_gps:'GPS-module',t_model:'Model',t_frame:'Framenummer',devmode:'🛠️ Ontwikkelmodus: COMODULE-probe staat AAN — logt 155e-statusframes en houdt de tracker verbonden (de module-accu loopt sneller leeg). Alleen voor ontwikkeling; zet COMODULE-probe (dev) uit in de configuratie als je klaar bent.',gps:'GPS-module & locatie',gps_conn:'verbonden',in_range:'in bereik',out_range:'buiten bereik',ob_title:'Nog geen fiets',ob_body:'Ga naar Instellingen, scan en koppel je fiets om te beginnen.',ob_btn:'Naar Instellingen',remove_bike:'Verwijder fiets',remove_confirm_btn:'Bevestig verwijderen',remove_confirm:'⚠️ Weet je het zeker? Klik nogmaals om te wissen.',removed_ok:'Verwijderd ✓',lk_on:'🔒 Vergrendeld',lk_off:'🔓 Ontgrendeld',refresh_module:'Module-accu verversen',refreshing:'verversen…',t_pname:'Productnaam',t_color:'Kleur',t_part:'Onderdeelnummer',t_sku:'Artikelcode',t_pcode:'Productcode',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth-adres',t_mac:'MAC-adres',t_mfr:'Fabrikant',t_hw:'Hardware',t_batt:'Module-accu',t_gps:'GPS-coördinaten',legal:'Onofficiële, door de community gemaakte integratie. Niet gelieerd aan, goedgekeurd of ondersteund door Bosch eBike Systems of Urban Arrow. Gebruik volledig op eigen risico, zonder enige garantie. Alle merknamen zijn eigendom van hun respectievelijke eigenaren.',su_bike_h:'1. Fiets',su_bike_p:"Zet het display van de fiets aan en scan.",scan_bikes:'Scan fietsen',select_bike:'Selecteer deze fiets',su_pair_p:'Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:',pair_btn:'Koppel (pair)',su_tracker_h:'2. GPS-tracker (anti-diefstal, optioneel)',su_tracker_p:"De tracker is altijd aan. Scan en kies 'm, of sla over.",scan_trackers:'Scan trackers',skip:'Overslaan / uit',select_tracker:'Selecteer deze tracker',su_alarm_h:'3. Alarm (optioneel — vereist de tracker)',su_alarm_p:'Afwezig = hard (push + lampen), Thuis = stil (alleen melding). Uit = alleen de bewegingssensor.',conn_on:'Verbonden',conn_off:'Niet verbonden',no_reading:'nog geen meting',up_now:'zojuist bijgewerkt',up_min:'bijgewerkt {n} min geleden',up_hour:'bijgewerkt {n} uur geleden',up_day:'bijgewerkt {n} d geleden',motion_y:'beweging',motion_n:'rustig',alarm_off:'Alarm uit',s_disarmed:'Uit',s_home:'Stil',s_away:'Vol alarm',s_trig:'⚠️ GEACTIVEERD',a_off:'Uit',a_home:'Stil',a_away:'Vol alarm',alarm_off_hint:'Alarm staat uit (zie Instellingen)',alarm_enable:'Alarm inschakelen',alarm_disable:'Alarm uitschakelen',now_off:'momenteel uit',now_on:'momenteel aan',scanning:'scannen… (±8s)',nothing:'niets gevonden — staat het apparaat aan/in bereik?',pairing:'koppelen…',paired_ok:'Gekoppeld ✓',paired_fail:'Mislukt — staat de fiets in pairing mode?',request_photo:'Andere fiets? Vraag je kleur/model aan',sec_warn:'⚠️ Let op: scherp zetten houdt de tracker verbonden — daardoor loopt de module-accu sneller leeg. Bij ≤20% schakelt het alarm automatisch uit.',ext_h:'Externe bewegingssensor (op de fiets)',ext_p:'Kies een eigen Home Assistant-sensor (contact-, trillings- of bewegingssensor) die je op de fiets monteert. Gaat die aan, dan telt dat als beweging en gaat — als het alarm scherp staat — het alarm af. Werkt los van Bluetooth.',ext_save:'Opslaan',ext_none:'— Geen —',saved_ok:'Opgeslagen ✓',sens_h:'Sensoren',sens_p:'Elke bron die beweging of diefstal kan melden — de ingebouwde fietssensoren én je eigen HA-sensoren — staat hier als een rij die je apart aan/uit zet, met dezelfde opties.',sens_add:'+ Sensor toevoegen',sens_pick:'Kies een sensor…',s_tracker:'Tracker-beweging (Bluetooth)',s_presence:'Nabijheid tracker (buiten bereik)',s_ext:'Externe sensor',o_role:'Rol:',role_alarm:'Alarm',role_motion:'Alleen beweging',o_alwayson:'Altijd aan (ook als alarm uit)',o_unavail:'Onbereikbaar = sabotage',o_invert:'Omkeren',o_dbl:'Dubbele controle',m_silent:'Stil',m_loud:'Vol alarm',entry_delay:'Ingangsvertraging',exit_delay:'Uitgangsvertraging',sens_delay_hint:'Uitgang = tijd na scherpzetten voordat sensoren tellen (wegrijden). Ingang = genadetijd voordat het alarm echt afgaat.',dbl_win:'Venster dubbele controle',dbl_hint:'Sensoren met “Dubbele controle” laten het alarm pas afgaan als er minstens twee binnen dit venster samen bevestigen.',st_unavail:'onbereikbaar',cloud:'Cloud (PON)',cloud_charge:'Module-lading (cloud)',cloud_loc:'Locatie',cl_moving:'Rijdt',cl_parked:'Geparkeerd',cloud_home:'Afstand tot huis',at_home:'Thuis',away:'Onderweg',mb_in:'Hoofdaccu erin (module laadt)',mb_out:'Hoofdaccu eruit (module op eigen accu)',bosch_h:'Accu & service',b_soh:'Gezondheid',b_cycles:'Laadcycli',b_energy:'Geleverd',b_motor:'Motor-uren',b_service:'Volgende beurt',b_sw:'Software',cloud_accounts:'Cloud-accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (locatie/GPS)',acc_bosch:'Bosch (diagnostiek)',acc_linked:'gekoppeld ✓',acc_off:'niet ingesteld',acc_hint:'Live data komt via Bluetooth (scan hieronder). Diagnostiek en locatie komen via je Bosch/PON-account (add-on-instellingen) — die fiets wordt automatisch gekoppeld, zonder scan.',your_bike:'jouw geregistreerde fiets',registered:'geregistreerd',acc_checking:'controleren…',activities:'Activiteiten',act_ride_start:'Rit gestart',act_ride_stop:'Rit gestopt',act_left_home:'Vertrokken van huis',act_arrived_home:'Thuisgekomen',act_moved:'Verplaatst',act_none:'nog geen activiteit geregistreerd',ranges_short:'bereik'},
-en:{tab_dash:'Dashboard',tab_more:'More info',tab_set:'Settings',components:'Components',about:'About this add-on',about_p:'Reads your Bosch Smart System eBike (Kiox) over Bluetooth and publishes battery, range, mode, odometer, service, motion/alarm and tracker to Home Assistant.',about_repo:'Source code on GitHub',c_drive:'Drive unit',c_batt:'Battery',c_disp:'Display',c_hub:'Hub',mode:'Ride mode',maint:'Maintenance',maint_sub:'until the next service',security:'Security',ranges:'Estimated range per mode',mileage:'Odometer',tech:'Technical info',tech_kiox:'Kiox (Bosch hub)',tech_gps:'GPS module',t_model:'Model',t_frame:'Frame number',devmode:'🛠️ Developer mode: the COMODULE probe is ON — it logs 155e status frames and keeps the tracker connected (drains the module battery faster). For development only; turn off COMODULE probe (dev) in the configuration when done.',gps:'GPS module & location',gps_conn:'connected',in_range:'in range',out_range:'out of range',ob_title:'No bike yet',ob_body:'Go to Settings, scan and pair your bike to get started.',ob_btn:'Go to Settings',remove_bike:'Remove bike',remove_confirm_btn:'Confirm remove',remove_confirm:'⚠️ Are you sure? Click again to wipe.',removed_ok:'Removed ✓',lk_on:'🔒 Locked',lk_off:'🔓 Unlocked',refresh_module:'Refresh module battery',refreshing:'refreshing…',t_pname:'Product name',t_color:'Colour',t_part:'Part number',t_sku:'Article code',t_pcode:'Product code',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth address',t_mac:'MAC address',t_mfr:'Manufacturer',t_hw:'Hardware',t_batt:'Module battery',t_gps:'GPS coordinates',legal:'Unofficial, community-made integration. Not affiliated with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow. Use entirely at your own risk, without any warranty. All trademarks are the property of their respective owners.',su_bike_h:'1. Bike',su_bike_p:"Turn on the bike's display and scan.",scan_bikes:'Scan bikes',select_bike:'Select this bike',su_pair_p:'Put the bike in pairing mode (display → connect a new device), then:',pair_btn:'Pair',su_tracker_h:'2. GPS tracker (anti-theft, optional)',su_tracker_p:'The tracker is always on. Scan and pick it, or skip.',scan_trackers:'Scan trackers',skip:'Skip / off',select_tracker:'Select this tracker',su_alarm_h:'3. Alarm (optional — needs the tracker)',su_alarm_p:'Away = loud (push + lights), Home = silent (notification only). Off = motion sensor only.',conn_on:'Connected',conn_off:'Not connected',no_reading:'no reading yet',up_now:'updated just now',up_min:'updated {n} min ago',up_hour:'updated {n} h ago',up_day:'updated {n} d ago',motion_y:'motion',motion_n:'still',alarm_off:'Alarm off',s_disarmed:'Off',s_home:'Silent',s_away:'Full alarm',s_trig:'⚠️ TRIGGERED',a_off:'Off',a_home:'Silent',a_away:'Full alarm',alarm_off_hint:'Alarm is off (see Settings)',alarm_enable:'Enable alarm',alarm_disable:'Disable alarm',now_off:'currently off',now_on:'currently on',scanning:'scanning… (±8s)',nothing:'nothing found — is the device on / in range?',pairing:'pairing…',paired_ok:'Paired ✓',paired_fail:'Failed — is the bike in pairing mode?',request_photo:'Different bike? Request your colour & model',sec_warn:'⚠️ Note: arming keeps the tracker connected — this drains the module battery faster. At ≤20% the alarm switches off automatically.',ext_h:'External motion sensor (on the bike)',ext_p:'Pick your own Home Assistant sensor (contact, vibration or motion) that you mount on the bike. When it turns on it counts as motion and — if the alarm is armed — triggers it. Works independently of Bluetooth.',ext_save:'Save',ext_none:'— None —',saved_ok:'Saved ✓',sens_h:'Sensors',sens_p:'Every source that can report movement or theft — the built-in bike sensors and your own HA sensors — is a row here you enable/disable individually, with the same options.',sens_add:'+ Add sensor',sens_pick:'Pick a sensor…',s_tracker:'Tracker motion (Bluetooth)',s_presence:'Tracker presence (out of range)',s_ext:'External sensor',o_role:'Role:',role_alarm:'Alarm',role_motion:'Motion only',o_alwayson:'Always on (even when disarmed)',o_unavail:'Unavailable = tamper',o_invert:'Invert',o_dbl:'Double-check',m_silent:'Silent',m_loud:'Full alarm',entry_delay:'Entry delay',exit_delay:'Exit delay',sens_delay_hint:'Exit = grace after arming before sensors count (riding away). Entry = grace before the alarm actually fires.',dbl_win:'Double-check window',dbl_hint:'Sensors marked “Double-check” only trip the alarm once at least two confirm together within this window.',st_unavail:'unavailable',cloud:'Cloud (PON)',cloud_charge:'Module charge (cloud)',cloud_loc:'Location',cl_moving:'Moving',cl_parked:'Parked',cloud_home:'Distance from home',at_home:'Home',away:'Away',mb_in:'Main battery in (module charging)',mb_out:'Main battery out (module on its own)',bosch_h:'Battery & service',b_soh:'Health',b_cycles:'Charge cycles',b_energy:'Delivered',b_motor:'Motor hours',b_service:'Next service',b_sw:'Software',cloud_accounts:'Cloud accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (location/GPS)',acc_bosch:'Bosch (diagnostics)',acc_linked:'linked ✓',acc_off:'not set',acc_hint:'Live data comes over Bluetooth (scan below). Diagnostics and location come from your Bosch/PON account (add-on Settings) — that bike is linked automatically, without a scan.',your_bike:'your registered bike',registered:'registered',acc_checking:'checking…',activities:'Activity',act_ride_start:'Ride started',act_ride_stop:'Ride stopped',act_left_home:'Left home',act_arrived_home:'Arrived home',act_moved:'Moved',act_none:'no activity recorded yet',ranges_short:'range'}};
+const T={nl:{tab_dash:'Dashboard',tab_more:'Meer info',tab_set:'Instellingen',components:'Componenten',about:'Over deze add-on',about_p:'Leest je Bosch Smart System eBike (Kiox) via Bluetooth uit en publiceert batterij, bereik, modus, km-stand, beurt, beweging/alarm en tracker naar Home Assistant.',about_repo:'Broncode op GitHub',c_drive:'Aandrijving',c_batt:'Accu',c_disp:'Display',c_hub:'Hub',mode:'Rijmodus',maint:'Onderhoud',maint_sub:'tot de volgende servicebeurt',security:'Beveiliging',ranges:'Geschat bereik per stand',mileage:'Kilometerstand',tech:'Technische info',tech_kiox:'Kiox (Bosch-hub)',tech_gps:'GPS-module',t_model:'Model',t_frame:'Framenummer',devmode:'🛠️ Ontwikkelmodus: COMODULE-probe staat AAN — logt 155e-statusframes en houdt de tracker verbonden (de module-accu loopt sneller leeg). Alleen voor ontwikkeling; zet COMODULE-probe (dev) uit in de configuratie als je klaar bent.',gps:'GPS-module & locatie',gps_conn:'verbonden',in_range:'in bereik',out_range:'buiten bereik',ob_title:'Voeg je fiets toe',ob_body:"Zet het display van de fiets aan (en in koppelmodus) — dan verschijnt 'ie hieronder.",ob_scan:'Zoek fiets',add_bike:'Toevoegen',adding:'Toevoegen…',replace_bike:'Andere fiets koppelen',ob_btn:'Naar Instellingen',remove_bike:'Verwijder fiets',remove_confirm_btn:'Bevestig verwijderen',remove_confirm:'⚠️ Weet je het zeker? Klik nogmaals om te wissen.',removed_ok:'Verwijderd ✓',lk_on:'🔒 Vergrendeld',lk_off:'🔓 Ontgrendeld',refresh_module:'Module-accu verversen',refreshing:'verversen…',t_pname:'Productnaam',t_color:'Kleur',t_part:'Onderdeelnummer',t_sku:'Artikelcode',t_pcode:'Productcode',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth-adres',t_mac:'MAC-adres',t_mfr:'Fabrikant',t_hw:'Hardware',t_batt:'Module-accu',t_gps:'GPS-coördinaten',legal:'Onofficiële, door de community gemaakte integratie. Niet gelieerd aan, goedgekeurd of ondersteund door Bosch eBike Systems of Urban Arrow. Gebruik volledig op eigen risico, zonder enige garantie. Alle merknamen zijn eigendom van hun respectievelijke eigenaren.',su_bike_h:'1. Fiets',su_bike_p:"Zet het display van de fiets aan en zoek 'm.",scan_bikes:'Scan fietsen',select_bike:'Selecteer deze fiets',su_pair_p:'Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:',pair_btn:'Koppel (pair)',su_tracker_h:'2. GPS-tracker (anti-diefstal, optioneel)',su_tracker_p:"De tracker is altijd aan. Scan en kies 'm, of sla over.",scan_trackers:'Scan trackers',skip:'Overslaan / uit',select_tracker:'Selecteer deze tracker',su_alarm_h:'3. Alarm (optioneel — vereist de tracker)',su_alarm_p:'Afwezig = hard (push + lampen), Thuis = stil (alleen melding). Uit = alleen de bewegingssensor.',conn_on:'Verbonden',conn_off:'Niet verbonden',no_reading:'nog geen meting',up_now:'zojuist bijgewerkt',up_min:'bijgewerkt {n} min geleden',up_hour:'bijgewerkt {n} uur geleden',up_day:'bijgewerkt {n} d geleden',motion_y:'beweging',motion_n:'rustig',alarm_off:'Alarm uit',s_disarmed:'Uit',s_home:'Stil',s_away:'Vol alarm',s_trig:'⚠️ GEACTIVEERD',a_off:'Uit',a_home:'Stil',a_away:'Vol alarm',alarm_off_hint:'Alarm staat uit (zie Instellingen)',alarm_enable:'Alarm inschakelen',alarm_disable:'Alarm uitschakelen',now_off:'momenteel uit',now_on:'momenteel aan',scanning:'scannen… (±8s)',nothing:'niets gevonden — staat het apparaat aan/in bereik?',pairing:'koppelen…',paired_ok:'Gekoppeld ✓',paired_fail:'Mislukt — staat de fiets in pairing mode?',request_photo:'Andere fiets? Vraag je kleur/model aan',sec_warn:'⚠️ Let op: scherp zetten houdt de tracker verbonden — daardoor loopt de module-accu sneller leeg. Bij ≤20% schakelt het alarm automatisch uit.',ext_h:'Externe bewegingssensor (op de fiets)',ext_p:'Kies een eigen Home Assistant-sensor (contact-, trillings- of bewegingssensor) die je op de fiets monteert. Gaat die aan, dan telt dat als beweging en gaat — als het alarm scherp staat — het alarm af. Werkt los van Bluetooth.',ext_save:'Opslaan',ext_none:'— Geen —',saved_ok:'Opgeslagen ✓',sens_h:'Sensoren',sens_p:'Elke bron die beweging of diefstal kan melden — de ingebouwde fietssensoren én je eigen HA-sensoren — staat hier als een rij die je apart aan/uit zet, met dezelfde opties.',sens_add:'+ Sensor toevoegen',sens_pick:'Kies een sensor…',s_tracker:'Tracker-beweging (Bluetooth)',s_presence:'Nabijheid tracker (buiten bereik)',s_ext:'Externe sensor',o_role:'Rol:',role_alarm:'Alarm',role_motion:'Alleen beweging',o_alwayson:'Altijd aan (ook als alarm uit)',o_unavail:'Onbereikbaar = sabotage',o_invert:'Omkeren',o_dbl:'Dubbele controle',m_silent:'Stil',m_loud:'Vol alarm',entry_delay:'Ingangsvertraging',exit_delay:'Uitgangsvertraging',sens_delay_hint:'Uitgang = tijd na scherpzetten voordat sensoren tellen (wegrijden). Ingang = genadetijd voordat het alarm echt afgaat.',dbl_win:'Venster dubbele controle',dbl_hint:'Sensoren met “Dubbele controle” laten het alarm pas afgaan als er minstens twee binnen dit venster samen bevestigen.',st_unavail:'onbereikbaar',cloud:'Cloud (PON)',cloud_charge:'Module-lading (cloud)',cloud_loc:'Locatie',cl_moving:'Rijdt',cl_parked:'Geparkeerd',cloud_home:'Afstand tot huis',at_home:'Thuis',away:'Onderweg',mb_in:'Hoofdaccu erin (module laadt)',mb_out:'Hoofdaccu eruit (module op eigen accu)',bosch_h:'Accu & service',b_soh:'Gezondheid',b_cycles:'Laadcycli',b_energy:'Geleverd',b_motor:'Motor-uren',b_service:'Volgende beurt',b_sw:'Software',cloud_accounts:'Cloud-accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (locatie/GPS)',acc_bosch:'Bosch (diagnostiek)',acc_linked:'gekoppeld ✓',acc_off:'niet ingesteld',acc_hint:'Live data komt via Bluetooth (scan hieronder). Diagnostiek en locatie komen via je Bosch/PON-account (add-on-instellingen) — die fiets wordt automatisch gekoppeld, zonder scan.',your_bike:'jouw geregistreerde fiets',registered:'geregistreerd',acc_checking:'controleren…',activities:'Activiteiten',act_ride_start:'Rit gestart',act_ride_stop:'Rit gestopt',act_left_home:'Vertrokken van huis',act_arrived_home:'Thuisgekomen',act_moved:'Verplaatst',act_none:'nog geen activiteit geregistreerd',ranges_short:'bereik'},
+en:{tab_dash:'Dashboard',tab_more:'More info',tab_set:'Settings',components:'Components',about:'About this add-on',about_p:'Reads your Bosch Smart System eBike (Kiox) over Bluetooth and publishes battery, range, mode, odometer, service, motion/alarm and tracker to Home Assistant.',about_repo:'Source code on GitHub',c_drive:'Drive unit',c_batt:'Battery',c_disp:'Display',c_hub:'Hub',mode:'Ride mode',maint:'Maintenance',maint_sub:'until the next service',security:'Security',ranges:'Estimated range per mode',mileage:'Odometer',tech:'Technical info',tech_kiox:'Kiox (Bosch hub)',tech_gps:'GPS module',t_model:'Model',t_frame:'Frame number',devmode:'🛠️ Developer mode: the COMODULE probe is ON — it logs 155e status frames and keeps the tracker connected (drains the module battery faster). For development only; turn off COMODULE probe (dev) in the configuration when done.',gps:'GPS module & location',gps_conn:'connected',in_range:'in range',out_range:'out of range',ob_title:'Add your bike',ob_body:"Turn on the bike's display (and put it in pairing mode) — it'll appear below.",ob_scan:'Find bike',add_bike:'Add',adding:'Adding…',replace_bike:'Link a different bike',ob_btn:'Go to Settings',remove_bike:'Remove bike',remove_confirm_btn:'Confirm remove',remove_confirm:'⚠️ Are you sure? Click again to wipe.',removed_ok:'Removed ✓',lk_on:'🔒 Locked',lk_off:'🔓 Unlocked',refresh_module:'Refresh module battery',refreshing:'refreshing…',t_pname:'Product name',t_color:'Colour',t_part:'Part number',t_sku:'Article code',t_pcode:'Product code',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth address',t_mac:'MAC address',t_mfr:'Manufacturer',t_hw:'Hardware',t_batt:'Module battery',t_gps:'GPS coordinates',legal:'Unofficial, community-made integration. Not affiliated with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow. Use entirely at your own risk, without any warranty. All trademarks are the property of their respective owners.',su_bike_h:'1. Bike',su_bike_p:"Turn on the bike's display and find it.",scan_bikes:'Scan bikes',select_bike:'Select this bike',su_pair_p:'Put the bike in pairing mode (display → connect a new device), then:',pair_btn:'Pair',su_tracker_h:'2. GPS tracker (anti-theft, optional)',su_tracker_p:'The tracker is always on. Scan and pick it, or skip.',scan_trackers:'Scan trackers',skip:'Skip / off',select_tracker:'Select this tracker',su_alarm_h:'3. Alarm (optional — needs the tracker)',su_alarm_p:'Away = loud (push + lights), Home = silent (notification only). Off = motion sensor only.',conn_on:'Connected',conn_off:'Not connected',no_reading:'no reading yet',up_now:'updated just now',up_min:'updated {n} min ago',up_hour:'updated {n} h ago',up_day:'updated {n} d ago',motion_y:'motion',motion_n:'still',alarm_off:'Alarm off',s_disarmed:'Off',s_home:'Silent',s_away:'Full alarm',s_trig:'⚠️ TRIGGERED',a_off:'Off',a_home:'Silent',a_away:'Full alarm',alarm_off_hint:'Alarm is off (see Settings)',alarm_enable:'Enable alarm',alarm_disable:'Disable alarm',now_off:'currently off',now_on:'currently on',scanning:'scanning… (±8s)',nothing:'nothing found — is the device on / in range?',pairing:'pairing…',paired_ok:'Paired ✓',paired_fail:'Failed — is the bike in pairing mode?',request_photo:'Different bike? Request your colour & model',sec_warn:'⚠️ Note: arming keeps the tracker connected — this drains the module battery faster. At ≤20% the alarm switches off automatically.',ext_h:'External motion sensor (on the bike)',ext_p:'Pick your own Home Assistant sensor (contact, vibration or motion) that you mount on the bike. When it turns on it counts as motion and — if the alarm is armed — triggers it. Works independently of Bluetooth.',ext_save:'Save',ext_none:'— None —',saved_ok:'Saved ✓',sens_h:'Sensors',sens_p:'Every source that can report movement or theft — the built-in bike sensors and your own HA sensors — is a row here you enable/disable individually, with the same options.',sens_add:'+ Add sensor',sens_pick:'Pick a sensor…',s_tracker:'Tracker motion (Bluetooth)',s_presence:'Tracker presence (out of range)',s_ext:'External sensor',o_role:'Role:',role_alarm:'Alarm',role_motion:'Motion only',o_alwayson:'Always on (even when disarmed)',o_unavail:'Unavailable = tamper',o_invert:'Invert',o_dbl:'Double-check',m_silent:'Silent',m_loud:'Full alarm',entry_delay:'Entry delay',exit_delay:'Exit delay',sens_delay_hint:'Exit = grace after arming before sensors count (riding away). Entry = grace before the alarm actually fires.',dbl_win:'Double-check window',dbl_hint:'Sensors marked “Double-check” only trip the alarm once at least two confirm together within this window.',st_unavail:'unavailable',cloud:'Cloud (PON)',cloud_charge:'Module charge (cloud)',cloud_loc:'Location',cl_moving:'Moving',cl_parked:'Parked',cloud_home:'Distance from home',at_home:'Home',away:'Away',mb_in:'Main battery in (module charging)',mb_out:'Main battery out (module on its own)',bosch_h:'Battery & service',b_soh:'Health',b_cycles:'Charge cycles',b_energy:'Delivered',b_motor:'Motor hours',b_service:'Next service',b_sw:'Software',cloud_accounts:'Cloud accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (location/GPS)',acc_bosch:'Bosch (diagnostics)',acc_linked:'linked ✓',acc_off:'not set',acc_hint:'Live data comes over Bluetooth (scan below). Diagnostics and location come from your Bosch/PON account (add-on Settings) — that bike is linked automatically, without a scan.',your_bike:'your registered bike',registered:'registered',acc_checking:'checking…',activities:'Activity',act_ride_start:'Ride started',act_ride_stop:'Ride stopped',act_left_home:'Left home',act_arrived_home:'Arrived home',act_moved:'Moved',act_none:'no activity recorded yet',ranges_short:'range'}};
 const t=(k,n)=>((T[LANG]||T.en)[k]||k).replace('{n}',n);
 function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(e=>{e.textContent=t(e.dataset.i18n)});}
 const MC={Turbo:'#e2241a',Auto:'#7b3ff2','Tour+':'#1aa3e0',Tour:'#1aa3e0',Eco:'#5fb336',Off:'#8a8a8a'};
@@ -3066,7 +3081,7 @@ const bcol=p=>p>40?'#37a24a':p>15?'#f59e0b':'#e53935';
 let pick={bike:null,tracker:null};
 let _tab='dash';
 let SENS=null,ENTS=[],LIVE={};
-function tab(t){_tab=t;rt();if(t=='set')loadSensors();}
+function tab(t){_tab=t;window._replacing=false;rt();if(t=='set')loadSensors();}
 async function loadSensors(){
   let d;try{d=await api('api/sensors');}catch(e){return;}
   if(!d.available){$('#sensCard').style.display='none';return;}
@@ -3139,12 +3154,16 @@ async function refreshSensLive(){if(_tab!='set'||!SENS)return;
   el=$('#sb_b_presence');if(el)el.textContent=badgeB('presence');
   (SENS.external||[]).forEach((c,i)=>{const e=$('#sb_e_'+i);if(e)e.textContent=badgeE(c);});}
 function rt(){const added=window._added!==false;
-  $('#onboard').classList.toggle('hidden', added || _tab=='set');
+  const obVis=!added&&_tab=='dash';
+  $('#onboard').classList.toggle('hidden', !obVis);
   $('#dash').classList.toggle('hidden', _tab!='dash'||!added);
   $('#more').classList.toggle('hidden', _tab!='more'||!added);
   $('#set').classList.toggle('hidden', _tab!='set');
-  $('#removeBox').classList.toggle('hidden', !added);
-  $('#tabDash').classList.toggle('on',_tab=='dash');$('#tabMore').classList.toggle('on',_tab=='more');$('#tabSet').classList.toggle('on',_tab=='set');}
+  $('#addedBike').classList.toggle('hidden', !added);
+  $('#addFlow').classList.toggle('hidden', added&&!window._replacing);
+  $('#tabDash').classList.toggle('on',_tab=='dash');$('#tabMore').classList.toggle('on',_tab=='more');$('#tabSet').classList.toggle('on',_tab=='set');
+  if(obVis&&!window._obScan){window._obScan=1;scan('bike','#obFound');}
+  if(added){window._obScan=0;}}
 function ago(iso){if(!iso)return '';const ts=Date.parse(iso);if(isNaN(ts))return '';
   const s=Math.max(0,(Date.now()-ts)/1000);
   if(s<90)return t('up_now');if(s<3600)return t('up_min',Math.round(s/60));
@@ -3154,9 +3173,12 @@ const fresh=iso=>{const ts=Date.parse(iso);return !isNaN(ts)&&(Date.now()-ts)<15
 const fmtDist=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km';
 async function refresh(){const s=await api('api/status');const L=s.last||{};const di=L.device_info||{};const dev=s.device||{};const R=L.range||{};
   window._added=!s.bike_off&&!!(L.last_updated||L.frame_number||s.bike||s.locked);rt();
-  if(!$('#pairedCard').classList.contains('hidden')){
-    $('#pairedModel').textContent=L.bike_model||L.product_name||L.bike_brand||'Bosch Smart System eBike';
-    if(L.address||s.bike)$('#pairedMac').textContent=L.address||s.bike;}
+  if(window._added){
+    $('#addedName').textContent=L.bike_model||L.product_name||L.bike_brand||'Bosch Smart System eBike';
+    $('#addedMac').textContent=L.address||s.bike||'';
+    const conn=fresh(L.last_updated);
+    $('#addedConn').innerHTML=conn?`<span style="color:#43a047">✓ ${t('conn_on')}</span>`:`<span class=muted>${t('conn_off')}</span>`;
+    $('#pairArea').classList.toggle('hidden', conn);}
   $('#devBar').style.display=(s.probe||s.adv_probe||s.hub_probe)?'':'none';
   $('#bikeTitle').textContent=L.bike_model||L.product_name||L.bike_brand||di.manufacturer||dev.manufacturer||'Bosch eBike';
   $('#bikeSpec').textContent=L.last_updated?ago(L.last_updated):t('no_reading');
@@ -3288,43 +3310,47 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
 async function arm(cmd){await post('api/alarm',{cmd});refresh()}
 async function toggleAlarm(){await post('api/set_alarm',{on:window._alarmOff===true});refresh()}
 const fmt=d=>`${d.address} · ${d.rssi} dBm`+(d.module_mac?` · ${d.module_mac}`:'');
-async function scan(kind){const box=kind=='bike'?'#bikes':'#trackers';
+async function scan(kind,box){box=box||(kind=='bike'?'#bikes':'#trackers');
   $(box).innerHTML=`<span class=muted>${t('scanning')}</span>`;
-  const list=await api('api/scan',{method:'POST'});const items=list.filter(d=>d.kind==kind);
+  let list=[];try{list=await api('api/scan',{method:'POST'});}catch(e){}
+  const items=(list||[]).filter(d=>d.kind==kind);
   if(!items.length){$(box).innerHTML=`<span class=muted>${t('nothing')}</span>`;return}
-  $(box).innerHTML='';const els={};items.forEach(d=>{const el=document.createElement('div');el.className='row';
+  $(box).innerHTML='';const els={};
+  items.forEach(d=>{
    if(kind=='bike'){
-     el.innerHTML=`<img src=bike.png style="width:56px;height:auto;flex:0 0 auto">`+
-       `<div><b class=bname>Bosch Smart System eBike</b><div class=muted style="font-size:12px">${d.address} · ${d.rssi} dBm</div><div class=mtag style="font-size:12px;color:#43a047;margin-top:2px"></div></div>`;
+     const c=document.createElement('div');c.className='biketile';
+     c.innerHTML=`<img src=bike.png class=btimg><div class=btinfo><b class=bname>Bosch Smart System eBike</b><div class=muted style="font-size:12px">${d.address} · ${d.rssi} dBm</div><div class=mtag style="font-size:12px;color:#43a047;margin-top:2px"></div></div><button class=btadd>${t('add_bike')}</button>`;
+     c.querySelector('.btadd').onclick=()=>addBike(d,c);
+     els[d.address]=c;$(box).appendChild(c);
    }else{
+     const el=document.createElement('div');el.className='row';
      el.innerHTML=`<div><b>${d.name||kind}</b><div class=muted style="font-size:12px">${fmt(d)}</div></div>`;
-   }
-   el.onclick=()=>{pick[kind]=d;[...$(box).children].forEach(c=>c.classList.remove('sel'));el.classList.add('sel');
-    $(kind=='bike'?'#bikeActions':'#trackerActions').classList.remove('hidden')};
-   els[d.address]=el;$(box).appendChild(el);});
-  // Bosch cloud auto-match: identify each scanned bike, auto-select + name the match.
-  if(kind=='bike'){for(const d of items){const el=els[d.address];const tag=el&&el.querySelector('.mtag');
+     el.onclick=()=>{pick[kind]=d;[...$(box).children].forEach(c=>c.classList.remove('sel'));el.classList.add('sel');$('#trackerActions').classList.remove('hidden')};
+     $(box).appendChild(el);
+   }});
+  // Bosch cloud auto-match for bikes: mark + auto-name the registered bike.
+  if(kind=='bike'){for(const d of items){const c=els[d.address];const tag=c&&c.querySelector('.mtag');
     if(tag)tag.textContent='· '+t('acc_checking');
     let r={};try{r=await post('api/identify',{address:d.address});}catch(e){}
     if(!r||!r.registry){if(tag)tag.textContent='';break;}
-    if(r.matched){d.cloud_name=r.name;
+    if(r.matched){d.cloud_name=r.name;if(c)c.classList.add('match');
       if(tag)tag.textContent='✓ '+t('your_bike');
-      const nm=el&&el.querySelector('.bname');if(nm&&r.name)nm.textContent=r.name;
-      if(el)el.onclick();break;}          // auto-select the recognised bike
+      const nm=c&&c.querySelector('.bname');if(nm&&r.name)nm.textContent=r.name;break;}
     else if(tag)tag.textContent='';}}}
-async function selectBike(){await post('api/select_bike',{address:pick.bike.address,name:pick.bike.cloud_name||''});$('#pairBox').classList.remove('hidden');refresh()}
+async function addBike(d,tile){window._replacing=false;const btn=tile&&tile.querySelector('.btadd');
+  if(btn){btn.disabled=true;btn.textContent=t('adding');}
+  await post('api/select_bike',{address:d.address,name:d.cloud_name||''});
+  const r=await post('api/pair');await refresh();
+  if(r&&r.ok)tab('dash');}          // paired → show the dashboard; else the added tile shows the pair step
+function showScan(){window._replacing=true;$('#addFlow').classList.remove('hidden');scan('bike','#bikes');}
 async function removeBike(){const b=$('#removeBtn'),m=$('#removeMsg');
   if(!b.dataset.armed){b.dataset.armed='1';b.textContent=t('remove_confirm_btn');m.textContent=' '+t('remove_confirm');
     clearTimeout(window._rmT);window._rmT=setTimeout(()=>{b.dataset.armed='';b.textContent=t('remove_bike');m.textContent='';},6000);return;}
-  clearTimeout(window._rmT);b.dataset.armed='';b.textContent=t('remove_bike');
+  clearTimeout(window._rmT);b.dataset.armed='';b.textContent=t('remove_bike');window._replacing=false;
   await post('api/remove_bike');m.textContent=' '+t('removed_ok');refresh()}
 async function pair(){$('#pairBtn').disabled=true;$('#pairMsg').textContent=' '+t('pairing');
   const r=await post('api/pair');$('#pairBtn').disabled=false;
-  if(r.ok){$('#pairMsg').innerHTML='';$('#pairedCard').classList.remove('hidden');
-    $('#pairedMac').textContent=(pick.bike?pick.bike.address:'');
-    $('#pairedModel').textContent='Bosch Smart System eBike';}
-  else $('#pairMsg').innerHTML=` <span class=bad>${t('paired_fail')}</span>`;
-  refresh()}
+  $('#pairMsg').innerHTML=(r&&r.ok)?'':` <span class=bad>${t('paired_fail')}</span>`;refresh()}
 async function selectTracker(){await post('api/select_tracker',{module_mac:pick.tracker.module_mac});refresh()}
 async function skipTracker(){await post('api/select_tracker',{off:true});refresh()}
 async function refreshTracker(){const b=$('#trkBtn');b.disabled=true;b.textContent=t('refreshing');
