@@ -49,6 +49,15 @@ def _req(method, url, *, headers=None, data=None):
         return None, f"<{type(e).__name__}: {e}>"
 
 
+def _mask(v):
+    v = str(v or "")
+    return (v[:4] + "…" + v[-3:]) if len(v) > 8 else (v or "—")
+
+
+def _norm(v):
+    return str(v or "").replace("-", "").replace(" ", "").upper()
+
+
 def _keys(txt):
     try:
         j = json.loads(txt)
@@ -88,11 +97,13 @@ def main() -> int:
     desc, j = _keys(body)
     print("   status:", s, "|", desc)
     bike_id = batt_serial = None
+    bike_obj = None
     if s == 200 and isinstance(j, dict):
         bikes = j.get("bikes") or []
         print("   bikes count:", len(bikes))
         if bikes:
             b = bikes[0]
+            bike_obj = b
             print("   bike[0] keys:", sorted(b)[:20])
             bike_id = b.get("bikeId") or b.get("id")
             drive = b.get("driveUnit") or {}
@@ -143,7 +154,38 @@ def main() -> int:
         elif s != 200:
             print("   body:", body[:300])
 
-    print("\nDone. Paste the section headers + statuses back (not the token).")
+    # 5. Can we deterministically match the BLE-scanned bike to this cloud bike?
+    # Compare the BLE hub serial (DIS 0x2a25) against every cloud component id.
+    ble_serial = sys.argv[2] if len(sys.argv) > 2 else "57307-0100-01-A10-02-0000"
+    print("\n== 5. identifiers for BLE auto-match ==")
+    print("   BLE hub serial (DIS 0x2a25):", _mask(ble_serial))
+    cands = {}
+    if isinstance(bike_obj, dict):
+        du = bike_obj.get("driveUnit") or {}
+        hu = bike_obj.get("headUnit") or {}
+        rc = bike_obj.get("remoteControl") or {}
+        print("   headUnit keys:", sorted(hu)[:20])
+        cands["driveUnit.serialNumber"] = du.get("serialNumber")
+        cands["driveUnit.partNumber"] = du.get("partNumber")
+        cands["headUnit.serialNumber"] = hu.get("serialNumber")
+        cands["headUnit.partNumber"] = hu.get("partNumber")
+        cands["remoteControl.serialNumber"] = rc.get("serialNumber")
+        cands["remoteControl.partNumber"] = rc.get("partNumber")
+        for i, bt in enumerate(bike_obj.get("batteries") or []):
+            cands["batteries[%d].serialNumber" % i] = bt.get("serialNumber")
+            cands["batteries[%d].partNumber" % i] = bt.get("partNumber")
+    target = _norm(ble_serial)
+    hit = None
+    for k, v in cands.items():
+        match = " <== MATCHES BLE hub serial" if v and _norm(v) == target else ""
+        if match:
+            hit = k
+        print("   %s: %s%s" % (k, _mask(v), match))
+    print("   >>> MATCH:", hit or "none equal the BLE hub serial "
+          "(need another shared id, e.g. frame number)")
+
+    print("\nDone. Paste sections 1-2 statuses + all of section 5 back (values are "
+          "masked, so it's safe).")
     return 0
 
 
