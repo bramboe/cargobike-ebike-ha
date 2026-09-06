@@ -30,6 +30,7 @@ import math
 import os
 import re
 import time
+import urllib.parse
 
 import paho.mqtt.client as mqtt
 from bleak import BleakClient, BleakScanner
@@ -269,6 +270,55 @@ def _pon_save_refresh(rt: str) -> None:
 
 
 _pon_refresh: "str | None" = _pon_load_refresh()
+
+# Optional Bosch SingleKey ID CLOUD poll (additive, no BLE): dealer-grade battery
+# health + service data from the official Bosch Data Act API. Distinct from PON:
+# PON is a re-seller proxy of the same platform; this talks to Bosch directly, which
+# is the only surface exposing the service-book (SoH/cycles/next-service) and the
+# diagnosis-field-data (capacity tester). Needs the user's own Data Act app client_id
+# (portal.bosch-ebike.com/data-act/app) + a refresh_token from tools/bosch_login.py.
+# Refresh-token grant only here — the one-time interactive PKCE login is out-of-band.
+BOSCH_TOKEN_URL = ("https://p9.authz.bosch.com/auth/realms/obc/"
+                   "protocol/openid-connect/token")
+BOSCH_API = "https://api.bosch-ebike.com"
+# Smart System (BES3) endpoints — our BRC3600 hub is Smart System, not eBike System 2.
+BOSCH_BIKES_EP = "/bike-profile/smart-system/v1/bikes"
+BOSCH_SERVICE_EP = "/service-book/smart-system/v1/service-records"
+BOSCH_BIKEPASS_EP = "/bike-pass/smart-system/v1/bike-passes"
+# Diagnosis Field Data prefix is unconfirmed in Bosch's PDF; try candidates in order
+# and cache the one that answers (dealer-visit-gated, so 404 everywhere is normal).
+BOSCH_CAPACITY_CANDIDATES = (
+    "/diagnosis-field-data/smart-system/v1/capacity-testers",
+    "/field-data/smart-system/v1/capacity-testers",
+    "/smart-system/v1/capacity-testers",
+)
+BOSCH_CLIENT_ID: str = os.getenv("BOSCH_CLIENT_ID", "").strip()
+BOSCH_POLL: float = float(os.getenv("BOSCH_POLL", "3600") or 3600)  # service data is slow
+BOSCH_FILE = "/data/bosch.json"
+BOSCH_TOPIC = f"{NODE}/bosch"
+
+
+def _bosch_load_refresh() -> "str | None":
+    try:
+        with open(BOSCH_FILE) as fh:
+            rt = (json.load(fh).get("refresh_token") or "").strip()
+            if rt:
+                return rt
+    except Exception:  # noqa: BLE001
+        pass
+    return (os.getenv("BOSCH_REFRESH", "").strip() or None)
+
+
+def _bosch_save_refresh(rt: str) -> None:
+    try:
+        with open(BOSCH_FILE, "w") as fh:
+            json.dump({"refresh_token": rt}, fh)
+    except Exception as err:  # noqa: BLE001
+        log.warning("bosch save: %s", err)
+
+
+_bosch_refresh: "str | None" = _bosch_load_refresh()
+
 # Alarm (HomeKit Security System) is optional on top of the motion sensor.
 _alarm_off: bool = bool(_cfg0.get("alarm_off", False))
 # Battery-friendly: only hold the tracker connection while the alarm is armed
@@ -981,6 +1031,46 @@ def _publish_discovery(client: mqtt.Client) -> None:
             }),
             retain=True,
         )
+
+    # Bosch SingleKey ID cloud sensors (battery health + service) — read BOSCH_TOPIC,
+    # its own retained JSON so the last known values survive between slow polls. Only
+    # published when the Bosch cloud is configured; otherwise the topic stays empty
+    # and the entities simply show "unknown" (harmless).
+    def bcfg(obj_id: str, name: str, **extra) -> None:
+        client.publish(
+            f"{DISC_PREFIX}/sensor/{NODE}/{obj_id}/config",
+            json.dumps({
+                "name": name,
+                "unique_id": f"{NODE}_{obj_id}",
+                "state_topic": BOSCH_TOPIC,
+                "value_template": "{{ value_json.%s | default('') }}" % obj_id,
+                "device": DEVICE,
+                **extra,
+            }),
+            retain=True,
+        )
+
+    bcfg("battery_soh", "Battery health", unit_of_measurement="%",
+         state_class="measurement", icon="mdi:battery-heart-variant")
+    bcfg("battery_cycles", "Battery charge cycles", state_class="total_increasing",
+         icon="mdi:battery-sync")
+    bcfg("battery_measured_wh", "Battery measured capacity", device_class="energy_storage",
+         unit_of_measurement="Wh", icon="mdi:battery")
+    bcfg("battery_nominal_wh", "Battery nominal capacity", device_class="energy_storage",
+         unit_of_measurement="Wh", entity_category="diagnostic", icon="mdi:battery-outline")
+    bcfg("motor_hours", "Motor hours", unit_of_measurement="h",
+         state_class="total_increasing", icon="mdi:engine")
+    bcfg("next_service_days", "Next service in", unit_of_measurement="d",
+         icon="mdi:calendar-clock")
+    bcfg("software_update", "Software update available", icon="mdi:cloud-download")
+    bcfg("last_service_date", "Last service", device_class="timestamp",
+         entity_category="diagnostic")
+    bcfg("last_service_odometer", "Last service odometer", device_class="distance",
+         unit_of_measurement="km", entity_category="diagnostic", icon="mdi:counter")
+    bcfg("last_service_dealer", "Last service dealer", entity_category="diagnostic",
+         icon="mdi:store")
+    bcfg("capacity_tested_wh", "Capacity tester result", device_class="energy_storage",
+         unit_of_measurement="Wh", entity_category="diagnostic", icon="mdi:battery-check")
 
     publish_alarm_discovery(client)
 
@@ -2260,6 +2350,220 @@ async def pon_cloud_loop() -> None:
         await asyncio.sleep(PON_POLL_HOME if ble_present else PON_POLL)
 
 
+def _bnum(v):
+    """Best-effort float — Bosch ships most numeric fields as JSON strings."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _newest(records, rtype):
+    """Newest service record of a given type, by createdAt/updatedAt."""
+    hits = [r for r in (records or [])
+            if isinstance(r, dict) and r.get("type") == rtype]
+    if not hits:
+        return None
+    return max(hits, key=lambda r: str(r.get("createdAt") or r.get("updatedAt") or ""))
+
+
+def _parse_service_records(js: dict, battery_serial: "str | None") -> dict:
+    """Pull battery health + service fields from a smart-system service-records
+    response. Every field is optional — Bosch omits what a dealer never measured."""
+    out: dict = {}
+    records = (js.get("serviceRecords") or js.get("records")
+               or (js if isinstance(js, list) else [])) if isinstance(js, dict) else js
+    if isinstance(records, dict):
+        records = records.get("items") or []
+    records = records or []
+
+    # Battery State-of-Health — newest BATTERY_MEASUREMENT for our pack serial.
+    meas = None
+    cand = [r for r in records if isinstance(r, dict)
+            and r.get("type") == "BATTERY_MEASUREMENT"]
+    if battery_serial:
+        for r in cand:
+            b = (r.get("attributes") or {}).get("battery") or r.get("battery") or {}
+            if b.get("serialNumber") == battery_serial:
+                meas = r if meas is None else max(meas, r,
+                    key=lambda x: str(x.get("createdAt") or ""))
+    if meas is None and cand:
+        meas = max(cand, key=lambda x: str(x.get("createdAt") or ""))
+    if meas:
+        m = (meas.get("attributes") or {}).get("measurement") or meas.get("measurement") or meas
+        soh = _bnum(m.get("measuredCapacityPercentage"))
+        if soh is not None:
+            out["battery_soh"] = round(soh, 1)
+        for k, dst in (("measuredEnergyCapacity", "battery_measured_wh"),
+                       ("nominalEnergyCapacity", "battery_nominal_wh"),
+                       ("fullChargeCycles", "battery_cycles")):
+            v = _bnum(m.get(k))
+            if v is not None:
+                out[dst] = round(v)
+
+    # Next service — days + meters remaining (we already surface km elsewhere too).
+    nsi = None
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        a = r.get("attributes") or r
+        if a.get("daysNextService") is not None or a.get("metersNextService") is not None:
+            nsi = a
+            break
+    if nsi:
+        d = _bnum(nsi.get("daysNextService"))
+        if d is not None:
+            out["next_service_days"] = round(d)
+        km = _bnum(nsi.get("metersNextService"))
+        if km is not None:
+            out["next_service_km"] = round(km / 1000)
+
+    # Software update available (any customer component flags one).
+    comps = []
+    for r in records:
+        if isinstance(r, dict):
+            cc = (r.get("attributes") or {}).get("customerComponents") \
+                or r.get("customerComponents")
+            if isinstance(cc, list):
+                comps = cc
+                break
+    if comps:
+        out["software_update"] = "Yes" if any(
+            c.get("softwareUpdateAvailable") is True for c in comps
+            if isinstance(c, dict)) else "No"
+
+    # Last completed service — date / dealer / odometer.
+    last = _newest(records, "SERVICE") or _newest(records, "MAINTENANCE")
+    if last:
+        a = last.get("attributes") or last
+        out["last_service_date"] = last.get("createdAt") or a.get("date")
+        odo = _bnum(a.get("odometerValue"))
+        if odo is not None:
+            out["last_service_odometer"] = round(odo / 1000) if odo > 100000 else round(odo)
+        dealer = a.get("dealerName") or (a.get("dealer") or {}).get("name")
+        if dealer:
+            out["last_service_dealer"] = dealer
+    return out
+
+
+def _parse_capacity_tester(js: dict, battery_serial: "str | None") -> dict:
+    """Newest Bosch Capacity Tester measurement (dealer-gated) for our battery."""
+    out: dict = {}
+    testers = (js.get("capacityTesters") if isinstance(js, dict) else None) or []
+    matching = [t for t in testers if isinstance(t, dict) and (
+        not battery_serial
+        or (t.get("batteryData") or {}).get("serialNumber") == battery_serial
+        or t.get("serialNumber") == battery_serial)]
+    if not matching:
+        return out
+    newest = max(matching, key=lambda t: str(t.get("createdAt") or ""))
+    bd = newest.get("batteryData") or {}
+    for k, dst in (("measuredCapacity", "capacity_tested_wh"),
+                   ("nominalCapacity", "capacity_nominal_wh"),
+                   ("fullChargeCycles", "capacity_cycles")):
+        v = _bnum(bd.get(k))
+        if v is not None:
+            out[dst] = round(v)
+    if newest.get("createdAt"):
+        out["capacity_tested_at"] = newest["createdAt"]
+    return out
+
+
+async def bosch_cloud_loop() -> None:
+    """Additive Bosch SingleKey ID cloud poll (no BLE): battery State-of-Health,
+    charge cycles, next-service and last-service straight from Bosch's Data Act API.
+    Runs only when a Bosch client_id + refresh_token are configured; PON and BLE are
+    left untouched (this is the PRIMARY diagnostic source, PON the GPS/live fallback)."""
+    global _bosch_refresh
+    if not BOSCH_CLIENT_ID or not _bosch_refresh:
+        return
+    st = {"access": None, "exp": 0.0, "cap_path": None}
+
+    async def ensure_token() -> bool:
+        if st["access"] and time.time() < st["exp"] - 60:
+            return True
+        s, js = await _http_json("POST", BOSCH_TOKEN_URL, data={
+            "grant_type": "refresh_token", "client_id": BOSCH_CLIENT_ID,
+            "refresh_token": _bosch_refresh})
+        if s == 200 and js and js.get("access_token"):
+            st["access"] = js["access_token"]
+            st["exp"] = time.time() + float(js.get("expires_in", 3600))
+            rt = js.get("refresh_token")
+            if rt and rt != _bosch_refresh:      # Keycloak rotates refresh tokens
+                globals()["_bosch_refresh"] = rt
+                _bosch_save_refresh(rt)
+            return True
+        log.warning("Bosch token refresh failed (status %s)", s)
+        return False
+
+    async def api(path: str):
+        if not await ensure_token():
+            return None
+        hdr = {"Authorization": "Bearer " + st["access"], "Accept": "application/json"}
+        s, js = await _http_json("GET", BOSCH_API + path, headers=hdr)
+        if s == 401:                             # token died early — refresh once
+            st["access"] = None
+            if await ensure_token():
+                hdr["Authorization"] = "Bearer " + st["access"]
+                s, js = await _http_json("GET", BOSCH_API + path, headers=hdr)
+        return js if s == 200 else None
+
+    log.info("Bosch cloud poll starting (every %ss)", int(BOSCH_POLL))
+    while True:
+        try:
+            payload: dict = {}
+            bikes_js = await api(BOSCH_BIKES_EP)
+            bikes = (bikes_js.get("bikes") if isinstance(bikes_js, dict) else bikes_js) or []
+            bike = bikes[0] if bikes else None
+            if bike:
+                bike_id = bike.get("bikeId") or bike.get("id")
+                drive = bike.get("driveUnit") or {}
+                batt = bike.get("battery") or (bike.get("batteries") or [{}])[0] \
+                    if bike.get("batteries") else bike.get("battery") or {}
+                batt_serial = (batt or {}).get("serialNumber")
+                batt_part = (batt or {}).get("partNumber")
+                if drive.get("productName"):
+                    payload["drive_unit"] = drive["productName"]
+                if _bnum(drive.get("operatingHours")) is not None:
+                    payload["motor_hours"] = round(_bnum(drive.get("operatingHours")), 1)
+
+                if bike_id:
+                    svc = await api(f"{BOSCH_SERVICE_EP}?bikeId={bike_id}")
+                    if svc:
+                        payload.update(_parse_service_records(svc, batt_serial))
+                    bp = await api(f"{BOSCH_BIKEPASS_EP}?bikeId={bike_id}")
+                    if isinstance(bp, dict):
+                        fn = bp.get("frameNumber") or (bp.get("bikePass") or {}).get(
+                            "frameNumber")
+                        if fn:
+                            payload["frame_number_bosch"] = fn
+
+                # Diagnosis Field Data (dealer-gated) — capacity tester, path-discovered.
+                if batt_part and batt_serial:
+                    q = (f"?partNumber={urllib.parse.quote(str(batt_part), safe='')}"
+                         f"&serialNumber={urllib.parse.quote(str(batt_serial), safe='')}")
+                    order = ([st["cap_path"]] if st["cap_path"] else []) + [
+                        c for c in BOSCH_CAPACITY_CANDIDATES if c != st["cap_path"]]
+                    for cand in order:
+                        cap = await api(cand + q)
+                        if cap is not None:
+                            st["cap_path"] = cand
+                            payload.update(_parse_capacity_tester(cap, batt_serial))
+                            break
+
+            if payload:
+                payload["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                _last["bosch"] = payload
+                if _mqtt is not None:
+                    _mqtt.publish(BOSCH_TOPIC, json.dumps(payload), retain=True)
+                log.info("Bosch cloud: %s", ", ".join(sorted(payload)))
+        except Exception as err:  # noqa: BLE001
+            log.warning("Bosch cloud loop: %s: %s", type(err).__name__, err)
+        await asyncio.sleep(BOSCH_POLL)
+
+
 async def start_motion(_mqtt_client: mqtt.Client) -> None:
     """Launch the self-resolving motion watcher (no-op work if disabled)."""
     publish_motion(False)
@@ -3044,6 +3348,7 @@ async def main() -> None:
     asyncio.create_task(_persist_last_loop())   # keep the on-disk snapshot fresh
     asyncio.create_task(adv_probe_loop())       # dev: passive adv logging when enabled
     asyncio.create_task(pon_cloud_loop())       # additive cloud poll (no BLE)
+    asyncio.create_task(bosch_cloud_loop())     # additive Bosch health/service poll
     await ble_loop(_mqtt)
 
 
