@@ -2494,18 +2494,31 @@ async def bosch_cloud_loop() -> None:
     async def ensure_token() -> bool:
         if st["access"] and time.time() < st["exp"] - 60:
             return True
-        s, js = await _http_json("POST", BOSCH_TOKEN_URL, data={
-            "grant_type": "refresh_token", "client_id": BOSCH_CLIENT_ID,
-            "refresh_token": _bosch_refresh})
-        if s == 200 and js and js.get("access_token"):
-            st["access"] = js["access_token"]
-            st["exp"] = time.time() + float(js.get("expires_in", 3600))
-            rt = js.get("refresh_token")
-            if rt and rt != _bosch_refresh:      # Keycloak rotates refresh tokens
-                globals()["_bosch_refresh"] = rt
-                _bosch_save_refresh(rt)
-            return True
-        log.warning("Bosch token refresh failed (status %s)", s)
+        # Try the persisted (rotated) token first, then the freshly-configured
+        # option token. Each bosch_login.py run mints a new offline session and
+        # can revoke older tokens, so a token pasted into the add-on after an
+        # earlier one must win over the stale copy on disk.
+        seen, cands = [], []
+        for tok in (_bosch_refresh, (os.getenv("BOSCH_REFRESH") or "").strip()):
+            tok = (tok or "").strip()
+            if tok and tok not in seen:
+                seen.append(tok)
+                cands.append(tok)
+        s = None
+        for tok in cands:
+            s, js = await _http_json("POST", BOSCH_TOKEN_URL, data={
+                "grant_type": "refresh_token", "client_id": BOSCH_CLIENT_ID,
+                "refresh_token": tok})
+            if s == 200 and js and js.get("access_token"):
+                st["access"] = js["access_token"]
+                st["exp"] = time.time() + float(js.get("expires_in", 3600))
+                rt = js.get("refresh_token") or tok  # Keycloak rotates these
+                if rt != _bosch_refresh:
+                    globals()["_bosch_refresh"] = rt
+                    _bosch_save_refresh(rt)
+                return True
+        log.warning("Bosch token refresh failed (status %s) — re-mint with "
+                    "bosch_login.py and update bosch_refresh_token", s)
         return False
 
     async def api(path: str):
@@ -2537,7 +2550,9 @@ async def bosch_cloud_loop() -> None:
             # Bosch sensors then follow the actually-present bike (not just the first).
             bike = None
             bm = _bosch_match(_last.get("part_number"))
-            if bm:
+            if bm:                               # robust to BLE/cloud ordering
+                _last["cloud_matched"] = True
+                _last["cloud_bike_id"] = bm["bike_id"]
                 bike = next((b for b in bikes
                              if (b.get("id") or b.get("bikeId")) == bm["bike_id"]), None)
             if bike is None:
