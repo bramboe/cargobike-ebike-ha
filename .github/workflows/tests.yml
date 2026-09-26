@@ -1,0 +1,18 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # the add-on's Alpine 3.19 Python
+      - run: pip install -r requirements_test.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: ruff check --select E,F,W,B --ignore E501 ebike_battery/bosch_mqtt_reader.py tests
+      - run: python -m pytest -q

@@ -29,6 +29,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 import urllib.parse
 
@@ -102,6 +103,10 @@ TRACKER_REFRESH_TOPIC = f"{NODE}/tracker/refresh"
 ARMED_STATES = ("armed_away", "armed_home", "armed_night")
 
 _mqtt: "mqtt.Client | None" = None
+# Set while connected to the broker (paho's network thread sets/clears it).
+_mqtt_up = threading.Event()
+# How long to wait after connecting for the broker's retained alarm state.
+ALARM_RESTORE_WAIT = 5.0
 # Alarm state machine (HomeKit Security System via MQTT alarm_control_panel).
 _alarm: dict[str, object] = {"state": "disarmed", "restored": False, "fired": False}
 # Auto-detect: lock onto the first bike we successfully read, and back off bikes
@@ -115,6 +120,18 @@ DATA_FILE = "/data/ua.json"
 INGRESS_PORT = int(os.getenv("INGRESS_PORT", "8099"))
 
 
+def _write_json_atomic(path: str, data) -> None:
+    """Write JSON so the file is either the old or the new version, never a torn
+    mix: a crash or power cut mid-write must not corrupt the config or lose a
+    rotated cloud refresh token (the old token is already revoked by then)."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
 def _load_cfg() -> dict:
     try:
         with open(DATA_FILE) as fh:
@@ -125,15 +142,15 @@ def _load_cfg() -> dict:
 
 def _save_cfg() -> None:
     try:
-        with open(DATA_FILE, "w") as fh:
-            json.dump({"bike": _bike_addr, "tracker": _tracker_mac,
-                       "tracker_off": _tracker_off, "alarm_off": _alarm_off,
-                       "bike_off": _bike_off, "sensors": _sensors,
-                       "bike_model": _last.get("bike_model"),
-                       "bike_brand": _last.get("bike_brand"),
-                       "sku": _last.get("sku"),
-                       "product_code": _last.get("product_code"),
-                       "battery_model": _last.get("battery_model")}, fh)
+        _write_json_atomic(DATA_FILE, {
+            "bike": _bike_addr, "tracker": _tracker_mac,
+            "tracker_off": _tracker_off, "alarm_off": _alarm_off,
+            "bike_off": _bike_off, "sensors": _sensors,
+            "bike_model": _last.get("bike_model"),
+            "bike_brand": _last.get("bike_brand"),
+            "sku": _last.get("sku"),
+            "product_code": _last.get("product_code"),
+            "battery_model": _last.get("battery_model")})
     except Exception as err:  # noqa: BLE001
         log.warning("save config: %s", err)
 
@@ -158,8 +175,7 @@ _PERSIST_KEYS = (
 def _save_last() -> None:
     try:
         snapshot = {k: _last[k] for k in _PERSIST_KEYS if _last.get(k) is not None}
-        with open(LAST_FILE, "w") as fh:
-            json.dump(snapshot, fh)
+        _write_json_atomic(LAST_FILE, snapshot)
     except Exception as err:  # noqa: BLE001
         log.debug("save last: %s", err)
 
@@ -263,8 +279,7 @@ def _pon_load_refresh() -> "str | None":
 
 def _pon_save_refresh(rt: str) -> None:
     try:
-        with open(PON_FILE, "w") as fh:
-            json.dump({"refresh_token": rt}, fh)
+        _write_json_atomic(PON_FILE, {"refresh_token": rt})
     except Exception as err:  # noqa: BLE001
         log.warning("pon save: %s", err)
 
@@ -311,8 +326,7 @@ def _bosch_load_refresh() -> "str | None":
 
 def _bosch_save_refresh(rt: str) -> None:
     try:
-        with open(BOSCH_FILE, "w") as fh:
-            json.dump({"refresh_token": rt}, fh)
+        _write_json_atomic(BOSCH_FILE, {"refresh_token": rt})
     except Exception as err:  # noqa: BLE001
         log.warning("bosch save: %s", err)
 
@@ -438,6 +452,17 @@ _PROXY_KEY: str = os.getenv("BLE_PROXY_KEY", "").strip()
 # Last time our tracker's advert was heard by ANY source (local adapter, held
 # connection, or the remote BLE proxy). Drives the presence binary_sensor.
 _tracker_seen_ts: float = 0.0
+# "Heard just now": the presence scan runs every ~30 s, so a tracker heard within
+# this window is physically next to the adapter — i.e. parked at home. Unlike the
+# generous PRESENCE_GRACE (anti-false-alarm), this flips quickly on arrival/leave.
+TRACKER_NEAR_S = float(os.getenv("TRACKER_NEAR_S", "120") or 120)
+
+
+def _tracker_near(now: "float | None" = None) -> bool:
+    """True if our tracker was heard over BLE within TRACKER_NEAR_S."""
+    if not _tracker_seen_ts:
+        return False
+    return ((now if now is not None else time.time()) - _tracker_seen_ts) < TRACKER_NEAR_S
 # Infer whether the bike's MAIN battery is inserted from the module-charge TREND
 # (the module only charges when the main battery is in): rising/full = in, steadily
 # falling = out (module on its own battery). Used to skip proactive module reads
@@ -476,8 +501,7 @@ if _activity_log:                    # show saved history immediately on startup
 
 def _save_activity() -> None:
     try:
-        with open(ACTIVITY_FILE, "w") as fh:
-            json.dump(_activity_log[-80:], fh)
+        _write_json_atomic(ACTIVITY_FILE, _activity_log[-80:])
     except Exception as err:  # noqa: BLE001
         log.debug("activity save: %s", err)
 
@@ -500,9 +524,11 @@ def _log_activity(etype: str, lat=None, lon=None, **extra) -> None:
     log.info("activity: %s", etype)
 
 
-def _detect_activity(cloud: dict) -> None:
+def _detect_activity(cloud: dict, *, near_home: bool = False) -> None:
     """Log usage/movement transitions from the cloud snapshot. First poll after a
-    restart seeds the baseline silently (no spurious events)."""
+    restart seeds the baseline silently (no spurious events). near_home = the
+    tracker is heard over BLE right now, so a jump in the GPS fix is GPS noise or
+    the arrival itself — never a "moved while parked"."""
     prev = _pon_prev
     ls = cloud.get("loc_state")
     home = cloud.get("home")
@@ -518,7 +544,8 @@ def _detect_activity(cloud: dict) -> None:
         elif home is True and prev.get("home") is False:
             _log_activity("arrived_home", lat, lon)
         if (lat is not None and lon is not None and prev.get("lat") is not None
-                and ls != "moving"):
+                and ls != "moving" and prev.get("loc_state") != "moving"
+                and not near_home):
             d = _haversine(lat, lon, prev["lat"], prev["lon"])
             if d > 75:                       # a real displacement while parked
                 _log_activity("moved", lat, lon, dist=round(d))
@@ -528,6 +555,44 @@ def _detect_activity(cloud: dict) -> None:
         prev["lat"], prev["lon"] = lat, lon
     if not _last.get("activity_log"):
         _last["activity_log"] = _activity_log[-40:]
+
+
+# Ride detection when the cloud reports no speed (PON's TELEMETRY history answers
+# 403 unless that data category was shared with the app): a displacement of more
+# than GPS_MOVE_M between two polls means the bike is being ridden. Hysteresis:
+# "parked" only after GPS_STILL_POLLS still polls (a red light is not a stop), or
+# at once when the tracker is heard at home over BLE.
+GPS_MOVE_M = 75.0
+GPS_STILL_POLLS = 2
+_gps_track: dict = {"lat": None, "lon": None, "moving": False, "still": 0}
+
+
+def _gps_moving(lat, lon, accuracy=0, *, near_home: bool = False) -> bool:
+    """Moving/parked from consecutive cloud GPS fixes (see GPS_MOVE_M)."""
+    tr = _gps_track
+    if lat is None or lon is None:
+        return bool(tr["moving"])
+    if tr["lat"] is None:                       # first fix: baseline only
+        tr.update(lat=lat, lon=lon, moving=False, still=0)
+        return False
+    dist = _haversine(tr["lat"], tr["lon"], lat, lon)
+    tr["lat"], tr["lon"] = lat, lon
+    if near_home:                               # heard at home right now: parked
+        tr["moving"], tr["still"] = False, 0
+        return False
+    try:
+        acc = float(accuracy or 0)
+    except (TypeError, ValueError):
+        acc = 0.0
+    if dist > max(GPS_MOVE_M, 2 * acc):
+        tr["moving"], tr["still"] = True, 0
+    else:
+        tr["still"] += 1
+        if tr["still"] >= GPS_STILL_POLLS:
+            tr["moving"] = False
+    return bool(tr["moving"])
+
+
 # The bike's brand/model is NOT broadcast over BLE (it lives in the maker's
 # account/cloud), so the panel title is config-driven: the optional bike_model
 # option wins; otherwise the page falls back to the bike's Device-Information
@@ -550,8 +615,69 @@ _resolve_product()  # fill product_name/color from a restored sku/product_code
 _scan_lock = asyncio.Lock()
 # Only one tracker-battery read at a time (bike-on, startup, or manual button).
 _tracker_read_lock = asyncio.Lock()
+# Wakes the PON cloud poll early (it sleeps up to 30 min while the bike is home)
+# when BLE sees something change: bike switched on, tracker came/went.
+_cloud_wake_evt = asyncio.Event()
+_cloud_wake_ts = -1e9
+
+
+def _cloud_wake() -> None:
+    """Ask the cloud poll for a fresh position now (rate-limited)."""
+    global _cloud_wake_ts
+    now = time.monotonic()
+    if now - _cloud_wake_ts < 60:
+        return
+    _cloud_wake_ts = now
+    _cloud_wake_evt.set()
 # Main asyncio loop ref, so MQTT-thread callbacks can schedule coroutines.
 _loop: "asyncio.AbstractEventLoop | None" = None
+# Strong references to background tasks: the event loop only keeps weak ones, so
+# an unreferenced task can be garbage-collected mid-flight.
+_tasks: "set[asyncio.Task]" = set()
+
+
+def _task_done(task: "asyncio.Task") -> None:
+    _tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("background task %s failed: %s: %s", task.get_name(),
+                  type(exc).__name__, exc, exc_info=exc)
+
+
+def _spawn(coro, name: str) -> "asyncio.Task":
+    """Run a coroutine in the background: keep a reference, log a crash."""
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    _tasks.add(task)
+    task.add_done_callback(_task_done)
+    return task
+
+
+async def _run_forever(name: str, factory, *, first_delay: float = 10.0) -> None:
+    """Run a long-lived loop and restart it (with backoff) if it ever crashes,
+    so one unexpected error can't silently switch off e.g. the anti-theft
+    watcher until the add-on restarts. A normal return (feature not configured)
+    ends it for good."""
+    delay = first_delay
+    while True:
+        started = time.monotonic()
+        try:
+            await factory()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            log.error("%s crashed (%s: %s) — restarting in %.0fs",
+                      name, type(err).__name__, err, delay, exc_info=True)
+        if time.monotonic() - started > 600:
+            delay = first_delay           # it ran fine for a while: reset backoff
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 300.0)
+
+
+def _supervise(name: str, factory) -> "asyncio.Task":
+    return _spawn(_run_forever(name, factory), name)
 
 
 def publish_status(status: str, present: str = "ON") -> None:
@@ -598,8 +724,7 @@ def _charge_load() -> None:
 
 def _charge_save() -> None:
     try:
-        with open(_CHARGE_FILE, "w") as fh:
-            json.dump(_charge_hist[-500:], fh)
+        _write_json_atomic(_CHARGE_FILE, _charge_hist[-500:])
     except Exception as err:  # noqa: BLE001
         log.debug("charge save: %s", err)
 
@@ -658,6 +783,23 @@ def publish_alarm(state: str) -> None:
     _last["alarm"] = state
     if _mqtt is not None:
         _mqtt.publish(ALARM_STATE_TOPIC, state, retain=True)
+
+
+async def _alarm_restore() -> None:
+    """Restore the alarm state from the broker's retained copy, then assert it.
+
+    Waits for a real broker connection first: asserting the default ("disarmed")
+    before the retained state could arrive would silently disarm an armed bike
+    whenever the broker is slow or still starting."""
+    while not _mqtt_up.is_set():
+        await asyncio.sleep(0.5)
+    deadline = time.monotonic() + ALARM_RESTORE_WAIT
+    while not _alarm["restored"] and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+    if not _alarm["restored"]:
+        _alarm["restored"] = True
+        log.info("alarm: no retained state on the broker — starting %s", _alarm["state"])
+    publish_alarm(str(_alarm["state"]))
 
 
 def _want_tracker() -> bool:
@@ -975,6 +1117,7 @@ def _on_connect(client, _userdata, _flags, reason, _properties=None):
     if rc != 0:
         log.error("MQTT connection REFUSED (reason=%s) — check MQTT_USER/MQTT_PASS", reason)
         return
+    _mqtt_up.set()
     _publish_discovery(client)
     # Alarm: receive HomeKit/HA arm/disarm commands + restore the retained state.
     client.subscribe(ALARM_CMD_TOPIC)
@@ -986,52 +1129,80 @@ def _on_connect(client, _userdata, _flags, reason, _properties=None):
     client.subscribe(RANGE_TOPIC)
     client.subscribe(MOTION_TOPIC)
     client.subscribe(TRACKER_TOPIC)
+    if _alarm["restored"]:
+        # Reconnect (e.g. the broker restarted and may have lost its retained
+        # messages): re-assert the alarm so HA/HomeKit never show "unknown".
+        client.publish(ALARM_STATE_TOPIC, str(_alarm["state"]), retain=True)
     log.info("connected to MQTT %s:%s", MQTT_HOST, MQTT_PORT)
 
 
+def _on_disconnect(_client, _userdata, *args) -> None:
+    """paho v2 passes (flags, reason, properties), v1 just (rc)."""
+    was_up = _mqtt_up.is_set()
+    _mqtt_up.clear()
+    if was_up:
+        reason = args[1] if len(args) >= 2 else (args[0] if args else "?")
+        log.warning("MQTT disconnected (%s) — reconnecting in the background", reason)
+
+
 def _on_message(_client, _userdata, msg) -> None:
+    """Runs on paho's network thread: hand the message to the asyncio loop so all
+    state (_alarm, _last, …) is only ever changed from one thread."""
     try:
         payload = msg.payload.decode(errors="ignore").strip()
     except Exception:  # noqa: BLE001
         return
-    if msg.topic == ALARM_CMD_TOPIC:
+    loop = _loop
+    if loop is not None and not loop.is_closed():
+        try:
+            loop.call_soon_threadsafe(_handle_mqtt_message, msg.topic, payload)
+            return
+        except RuntimeError:        # loop shutting down
+            return
+    _handle_mqtt_message(msg.topic, payload)
+
+
+def _handle_mqtt_message(topic: str, payload: str) -> None:
+    if topic == ALARM_CMD_TOPIC:
         new = {"DISARM": "disarmed", "ARM_AWAY": "armed_away",
                "ARM_HOME": "armed_home", "ARM_NIGHT": "armed_night"}.get(payload.upper())
         if new:
+            # A fresh command wins over a retained state that may still arrive.
+            _alarm["restored"] = True
             _alarm["state"] = new
             _alarm["fired"] = False  # allow a fresh trigger after (re)arm/disarm
             if new in ARMED_STATES:
                 _note_armed()        # start the exit-delay window
             publish_alarm(new)
             log.info("alarm command %s -> %s", payload, new)
-    elif msg.topic == TRACKER_REFRESH_TOPIC:
+    elif topic == TRACKER_REFRESH_TOPIC:
         log.info("manual tracker-battery refresh requested")
         trigger_tracker_refresh()
-    elif msg.topic == ALARM_STATE_TOPIC and not _alarm["restored"]:
+    elif topic == ALARM_STATE_TOPIC and not _alarm["restored"]:
         # First retained message after (re)connect = restore the previous state.
         _alarm["restored"] = True
         if payload in ARMED_STATES + ("disarmed", "triggered"):
             _alarm["state"] = payload
             _last["alarm"] = payload
             log.info("alarm state restored: %s", payload)
-    elif msg.topic == STATE_TOPIC:        # retained last reading -> show in the UI
+    elif topic == STATE_TOPIC:        # retained last reading -> show in the UI
         try:
             _last.update(json.loads(payload))
         except Exception:  # noqa: BLE001
             pass
-    elif msg.topic == MODE_TOPIC:
+    elif topic == MODE_TOPIC:
         try:
             _last["mode"] = json.loads(payload).get("mode")
         except Exception:  # noqa: BLE001
             pass
-    elif msg.topic == RANGE_TOPIC:
+    elif topic == RANGE_TOPIC:
         try:
             _last["range"] = json.loads(payload)
         except Exception:  # noqa: BLE001
             pass
-    elif msg.topic == MOTION_TOPIC:
+    elif topic == MOTION_TOPIC:
         _last["motion"] = payload == "ON"
-    elif msg.topic == TRACKER_TOPIC:
+    elif topic == TRACKER_TOPIC:
         try:
             d = json.loads(payload)
             _last["tracker_battery"] = d.get("battery")
@@ -1381,8 +1552,13 @@ def make_mqtt() -> mqtt.Client:
     if MQTT_USER:
         client.username_pw_set(MQTT_USER, MQTT_PASS)
     client.on_connect = _on_connect
+    client.on_disconnect = _on_disconnect
     client.on_message = _on_message
-    client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+    client.reconnect_delay_set(min_delay=1, max_delay=60)
+    # Non-blocking: paho's network thread makes the first connection and keeps
+    # retrying, so a broker that is still starting (after a host reboot) or is
+    # restarting never takes the add-on down with it.
+    client.connect_async(MQTT_HOST, MQTT_PORT, keepalive=60)
     client.loop_start()
     return client
 
@@ -1753,10 +1929,29 @@ async def find_bike(timeout: float = 15.0):
     return found.get("device")
 
 
+def _err_text(err: BaseException) -> str:
+    """'Type: message' — with a readable text for the message-less timeouts."""
+    msg = str(err).strip()
+    if not msg and isinstance(err, (asyncio.TimeoutError, TimeoutError)):
+        msg = "timed out (bike out of reach or busy?)"
+    return f"{type(err).__name__}: {msg or 'no details'}"
+
+
+def _read_retry_delay(fails: int) -> float:
+    """Pause before the next scan: SCAN_GAP normally, growing after consecutive
+    failed reads so a bike that won't answer isn't hammered (which also starves
+    the presence/tracker scans on the shared adapter)."""
+    if fails <= 0:
+        return SCAN_GAP
+    return min(SCAN_GAP * (2 ** min(fails, 8)), max(COOLDOWN, 30.0))
+
+
 async def ble_loop(mqtt_client: mqtt.Client) -> None:
     """Scan (fresh each cycle); on detection, bond if needed and read once."""
     global _locked_addr
     last_ok = 0.0
+    fails = 0
+    was_seen = False
     log.info("scanning (%s)", _bike_addr or "auto-detect 'smart system eBike'")
     while True:
         try:
@@ -1769,7 +1964,11 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
                 continue
             device = await find_bike(timeout=15.0)
             auto = _bike_addr is None
+            if device is not None and not was_seen:
+                _cloud_wake()                 # bike switched on: fresh cloud position
+            was_seen = device is not None
             if device is None:
+                fails = 0
                 publish_status("Bike not found (off or out of range)", "OFF")
             elif time.time() - last_ok < COOLDOWN:
                 # Seen recently; wait out the cooldown before reading again.
@@ -1782,18 +1981,23 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
                 log.info("bike seen — connecting to read")
                 if not await ensure_bonded(device.address):
                     _pair_fail[device.address] = time.time()
+                    fails += 1
                 elif await read_snapshot(mqtt_client, device):
                     last_ok = time.time()
+                    fails = 0
                     if auto and _locked_addr is None:
                         _locked_addr = device.address
                         _pair_fail.clear()
                         log.info("locked onto bike %s", device.address)
                     # Bike is on -> refresh the tracker's own battery too (low-power).
                     await read_tracker_battery()
+                else:
+                    fails += 1
         except Exception as err:  # noqa: BLE001
-            log.warning("cycle failed: %s: %s", type(err).__name__, err or "(timeout)")
+            fails += 1
+            log.warning("cycle failed: %s", _err_text(err))
             publish_status("Connection failed — keep the bike on, retrying…", "ON")
-        await asyncio.sleep(SCAN_GAP)
+        await asyncio.sleep(_read_retry_delay(fails))
 
 
 # -------------------------------------------------------------------- COMODULE
@@ -1877,11 +2081,13 @@ async def motion_watcher() -> None:
             _last["tracker_connected"] = False
             await asyncio.sleep(4)
             continue
-        target = await find_comodule()
-        if target is None:
-            await asyncio.sleep(8)
-            continue
         try:
+            # Inside the try: a scan error (BlueZ busy/restarting) must end in a
+            # retry, not in a dead watcher while the alarm is armed.
+            target = await find_comodule()
+            if target is None:
+                await asyncio.sleep(8)
+                continue
             async with BleakClient(target, timeout=20.0) as client:
                 await client.start_notify(CHAR_155E, cb)
                 log.info("COMODULE motion watcher connected (%s)", target.address)
@@ -1961,7 +2167,11 @@ async def read_tracker_battery(proactive: bool = True) -> None:
 
 
 async def _do_read_tracker_battery() -> None:
-    target = await find_comodule()
+    try:
+        target = await find_comodule()
+    except Exception as err:  # noqa: BLE001 - BlueZ busy; this is best-effort
+        log.debug("tracker battery scan failed: %s", err)
+        return
     if target is None:
         return
     got = {"done": False}
@@ -1997,7 +2207,8 @@ def trigger_tracker_refresh() -> None:
     UI). Safe to call repeatedly — the read itself is single-flighted."""
     if _loop is not None:
         try:
-            asyncio.run_coroutine_threadsafe(read_tracker_battery(proactive=False), _loop)
+            _loop.call_soon_threadsafe(
+                lambda: _spawn(read_tracker_battery(proactive=False), "tracker_refresh"))
         except Exception as err:  # noqa: BLE001
             log.debug("tracker refresh schedule failed: %s", err)
 
@@ -2037,6 +2248,7 @@ async def presence_loop() -> None:
     armed — trips the alarm the moment the bike leaves range (present -> absent)."""
     global _tracker_seen_ts
     present: "bool | None" = None
+    near_prev: "bool | None" = None
     was_present = False
     while True:
         try:
@@ -2062,6 +2274,10 @@ async def presence_loop() -> None:
             elif await scan_tracker_present():
                 _tracker_seen_ts = now
             is_present = (now - _tracker_seen_ts) < PRESENCE_GRACE
+            near = _tracker_near(now)
+            if near_prev is not None and near != near_prev:
+                _cloud_wake()             # just arrived / just left: fresh position
+            near_prev = near
             if is_present != present:
                 present = is_present
                 _last["tracker_present"] = is_present
@@ -2410,24 +2626,62 @@ async def pon_cloud_loop() -> None:
             seen.add(tok)
             r = await _refresh(tok)
             if r is True:
+                if st.get("tok_fail"):
+                    st["tok_fail"] = False
+                    log.info("PON token refresh works again")
                 return True
             last = r
-        log.warning("PON token refresh failed (status %s)", last)
+        # Once per outage, not every poll.
+        (log.debug if st.get("tok_fail") else log.warning)(
+            "PON token refresh failed (status %s)", last)
+        st["tok_fail"] = True
         return False
 
+    # Endpoints PON refuses (403 = the app has no consent for that data), with
+    # [retry_at (monotonic), backoff_s]: skipped instead of re-requested (and the
+    # token refreshed) every poll. Endpoints with other failures, for quiet logs.
+    blocked: dict[str, list] = {}
+    failing: set = set()
+
+    def _ep(path: str) -> str:
+        """Endpoint key for logs/backoff: no query string, no bike id."""
+        p = path.split("?", 1)[0]
+        return p.replace(st["bike"], "{bike}") if st["bike"] else p
+
     async def api(path: str):
+        ep = _ep(path)
+        blk = blocked.get(ep)
+        if blk and time.monotonic() < blk[0]:
+            return None
         if not await ensure_token():
             return None
         hdr = {"Authorization": "Bearer " + st["access"], "Accept": "application/json"}
         s, js = await _http_json("GET", PON_BASE + path, headers=hdr)
-        if s in (401, 403):        # token rejected — retry with the option token
+        if s == 401 or (s == 403 and not blk):
+            # Token rejected — retry once with a fresh token, preferring the option
+            # token (a re-paste must win over a stale /data/pon.json). A 403 that
+            # survives a fresh token is a permission, not a token, problem.
             st["access"] = None
             if await ensure_token(prefer_option=True):
                 hdr["Authorization"] = "Bearer " + st["access"]
                 s, js = await _http_json("GET", PON_BASE + path, headers=hdr)
-        if s != 200:
-            log.warning("PON api %s -> status %s", path, s)
-        return js if s == 200 else None
+        if s == 403:
+            backoff = min(blk[1] * 2, 86400.0) if blk else 3600.0
+            if not blk:
+                log.warning("PON: %s not permitted (403) — the app has no access to "
+                            "this data; skipping it (re-checked every few hours)%s", ep,
+                            " — riding is detected from GPS movement instead"
+                            if "TELEMETRY" in ep else "")
+            blocked[ep] = [time.monotonic() + backoff, backoff]
+            return None
+        if s == 200:
+            if blocked.pop(ep, None) is not None or ep in failing:
+                log.info("PON: %s available again", ep)
+            failing.discard(ep)
+            return js
+        (log.debug if ep in failing else log.warning)("PON api %s -> status %s", ep, s)
+        failing.add(ep)
+        return None
 
     log.info("PON cloud poll starting (every %ss)", int(PON_POLL))
     # Seed the main-battery charge trend from recent cloud history so the inference
@@ -2523,21 +2777,39 @@ async def pon_cloud_loop() -> None:
             # BLE presence is the authority for home/away (seeing the tracker costs
             # no battery). Cloud home/distance stays pure GPS — only used to show
             # WHERE the bike is when BLE can't see it. Poll cloud slowly when home.
-            ble_present = bool(_tracker_seen_ts and
-                               time.time() - _tracker_seen_ts < PRESENCE_GRACE)
+            near_home = _tracker_near()
+            moving = False
             if payload:
-                payload["in_use"] = bool(payload.get("speed", 0) > 0)
-                payload["loc_state"] = "moving" if payload["in_use"] else "parked"
+                speed = _bnum(payload.get("speed"))
+                if speed is not None:
+                    moving = speed > 0
+                    payload["motion_source"] = "speed"
+                else:                          # no telemetry: GPS displacement
+                    moving = _gps_moving(payload.get("latitude"),
+                                         payload.get("longitude"),
+                                         payload.get("gps_accuracy"),
+                                         near_home=near_home)
+                    payload["motion_source"] = "gps"
+                payload["in_use"] = moving
+                payload["loc_state"] = "moving" if moving else "parked"
                 payload["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                _detect_activity(payload)     # log usage/movement transitions
+                _detect_activity(payload, near_home=near_home)  # log transitions
                 _last["cloud"] = payload
                 if _mqtt is not None:
                     _mqtt.publish(CLOUD_TOPIC, json.dumps(payload), retain=True)
                     _mqtt.publish(CLOUD_STATE_TOPIC, payload["loc_state"], retain=True)
+            slow = near_home and not moving
         except Exception as err:  # noqa: BLE001
-            log.warning("PON cloud loop: %s: %s", type(err).__name__, err)
-            ble_present = False
-        await asyncio.sleep(PON_POLL_HOME if ble_present else PON_POLL)
+            log.warning("PON cloud loop: %s", _err_text(err))
+            slow = False
+        # Poll slowly only while the bike is parked at home; wake early when BLE
+        # sees it switch on, arrive or leave (see _cloud_wake).
+        try:
+            await asyncio.wait_for(_cloud_wake_evt.wait(),
+                                   timeout=PON_POLL_HOME if slow else PON_POLL)
+        except asyncio.TimeoutError:
+            pass
+        _cloud_wake_evt.clear()
 
 
 def _bnum(v):
@@ -2777,17 +3049,21 @@ async def bosch_cloud_loop() -> None:
                     # (never a report/write — just surfacing what Bosch recorded).
                     tlogs = (bp.get("theftReportLogs")
                              if isinstance(bp, dict) else None) or []
-                    log.info("Bosch theft log: %d entr%s", len(tlogs),
-                             "y" if len(tlogs) == 1 else "ies")
-                    if tlogs:
-                        newest = max(tlogs, key=lambda e: str(e.get("createdAt") or ""))
-                        loc = newest.get("location") or {}
-                        log.info("Bosch theft newest: created=%s entered=%s "
-                                 "lat=%s lon=%s addr=%s detected=%s",
-                                 newest.get("createdAt"),
-                                 newest.get("theftCaseEnteredAt"),
-                                 loc.get("latitude"), loc.get("longitude"),
-                                 loc.get("address"), loc.get("detectedAt"))
+                    newest = (max(tlogs, key=lambda e: str(e.get("createdAt") or ""))
+                              if tlogs else None)
+                    sig = (len(tlogs), (newest or {}).get("createdAt"))
+                    if sig != st.get("theft_sig"):   # log changes only, not hourly
+                        st["theft_sig"] = sig
+                        log.info("Bosch theft log: %d entr%s", len(tlogs),
+                                 "y" if len(tlogs) == 1 else "ies")
+                        if newest:
+                            loc = newest.get("location") or {}
+                            log.info("Bosch theft newest: created=%s entered=%s "
+                                     "lat=%s lon=%s addr=%s detected=%s",
+                                     newest.get("createdAt"),
+                                     newest.get("theftCaseEnteredAt"),
+                                     loc.get("latitude"), loc.get("longitude"),
+                                     loc.get("address"), loc.get("detectedAt"))
 
                 # Diagnosis Field Data (dealer-gated) — capacity tester, path-discovered.
                 if batt_part and batt_serial:
@@ -2807,22 +3083,25 @@ async def bosch_cloud_loop() -> None:
                 _last["bosch"] = payload
                 if _mqtt is not None:
                     _mqtt.publish(BOSCH_TOPIC, json.dumps(payload), retain=True)
-                log.info("Bosch cloud: %s", ", ".join(sorted(payload)))
+                keys = ", ".join(sorted(payload))
+                if keys != st.get("keys"):          # log the field set when it changes
+                    st["keys"] = keys
+                    log.info("Bosch cloud: %s", keys)
         except Exception as err:  # noqa: BLE001
-            log.warning("Bosch cloud loop: %s: %s", type(err).__name__, err)
+            log.warning("Bosch cloud loop: %s", _err_text(err))
         await asyncio.sleep(BOSCH_POLL)
 
 
 async def start_motion(_mqtt_client: mqtt.Client) -> None:
     """Launch the self-resolving motion watcher (no-op work if disabled)."""
     publish_motion(False)
-    asyncio.create_task(motion_watcher())
+    _supervise("motion_watcher", motion_watcher)
     publish_present(False)
-    asyncio.create_task(presence_loop())
-    asyncio.create_task(proxy_presence_loop())
-    asyncio.create_task(ext_motion_loop())
-    asyncio.create_task(alarm_timing_loop())
-    asyncio.create_task(hub_probe_loop())
+    _supervise("presence_loop", presence_loop)
+    _supervise("proxy_presence_loop", proxy_presence_loop)
+    _supervise("ext_motion_loop", ext_motion_loop)
+    _supervise("alarm_timing_loop", alarm_timing_loop)
+    _supervise("hub_probe_loop", hub_probe_loop)
 
 
 async def adv_probe_loop() -> None:
@@ -3013,7 +3292,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
       <img class=bike src="bike.png" alt="Urban Arrow Family" />
     </div>
     <a class=reqlink id=reqPhoto data-i18n=request_photo target=_blank rel=noopener
-       href="https://github.com/bramboe/urban-arrow-ha/issues/new?title=Bike%20photo%20request&labels=bike-image&body=Model%20(Family%2FTender%2FCargo%2FFlatbed)%3A%20%0AType%2Fversion%20(e.g.%20Advanced%20Next)%3A%20%0AColour%3A%20%0AProduct%20photo%20URL%20(transparent%20PNG%20if%20possible)%3A%20">Andere fiets? Vraag je model aan</a>
+       href="https://github.com/bramboe/cargobike-ebike-ha/issues/new?title=Bike%20photo%20request&labels=bike-image&body=Model%20(Family%2FTender%2FCargo%2FFlatbed)%3A%20%0AType%2Fversion%20(e.g.%20Advanced%20Next)%3A%20%0AColour%3A%20%0AProduct%20photo%20URL%20(transparent%20PNG%20if%20possible)%3A%20">Andere fiets? Vraag je model aan</a>
   </div>
 
   <div class='rail col-rail'>
@@ -3058,7 +3337,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
     <div class=sub data-i18n=acc_hint style="margin-top:8px"></div></div>
   <div class=card><div class=lbl data-i18n=about>Over deze add-on</div>
     <p class=muted data-i18n=about_p></p>
-    <p><a id=repoLink href="https://github.com/bramboe/urban-arrow-ha" target=_blank rel=noopener data-i18n=about_repo>Broncode op GitHub</a></p>
+    <p><a id=repoLink href="https://github.com/bramboe/cargobike-ebike-ha" target=_blank rel=noopener data-i18n=about_repo>Broncode op GitHub</a></p>
     <div class=legal data-i18n=legal></div></div>
 </section>
 
@@ -3113,6 +3392,9 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 </div>
 <script>
 const $=s=>document.querySelector(s);
+// HTML-escape anything that isn't ours (BLE names, HA entity names, cloud fields)
+// before it goes into innerHTML: this page runs inside Home Assistant's origin.
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const api=async(p,o)=>(await fetch(p,o)).json();
 const post=(p,b)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 const LANG=(navigator.language||'en').toLowerCase().startsWith('nl')?'nl':'en';
@@ -3166,11 +3448,11 @@ function optRow(kind,ref,c,ext){let h=`<div class=sopts>`;
 function srow(kind,ref,name,c,bid,btxt,ext,rm){
   let h=`<div class="srow${c.enabled?'':' off'}"><div class=shead>`;
   h+=`<label class=switch><input type=checkbox ${c.enabled?'checked':''} onchange="sset('${kind}','${ref}','enabled',this)"><span class=sl></span></label>`;
-  h+=`<span class=snm>${name}</span><span class=sbadge id=${bid}>${btxt}</span>`;
+  h+=`<span class=snm>${esc(name)}</span><span class=sbadge id=${bid}>${esc(btxt)}</span>`;
   if(rm)h+=`<button class=sec style="padding:4px 10px" onclick="rmExt('${ref}')">✕</button>`;
   h+=`</div>`;
   if(ext){let os=`<option value="">${t('sens_pick')}</option>`;
-    ENTS.forEach(e=>{os+=`<option value="${e.entity_id}" data-nm="${(e.name||'').replace(/"/g,'')}" ${e.entity_id==c.entity_id?'selected':''}>${e.match?'★ ':''}${e.name}${e.device_class?' ('+e.device_class+')':''}</option>`;});
+    ENTS.forEach(e=>{os+=`<option value="${esc(e.entity_id)}" data-nm="${esc(e.name||'')}" ${e.entity_id==c.entity_id?'selected':''}>${e.match?'★ ':''}${esc(e.name)}${e.device_class?' ('+esc(e.device_class)+')':''}</option>`;});
     h+=`<select class=epick onchange="sentity('${ref}',this)">${os}</select>`;}
   return h+optRow(kind,ref,c,ext)+`</div>`;}
 function renderSensors(){let h='';
@@ -3232,22 +3514,23 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const cm=$('#cloudMatch');if(L.cloud_matched){cm.style.display='';cm.className='badge on';cm.textContent='✓ '+t('registered');cm.title=L.cloud_bike_id||'';}else cm.style.display='none';
   const p=L.battery; const fill=p==null?0:Math.max(0,Math.min(5,Math.round(p/20)));
   let seg='';for(let i=0;i<5;i++)seg+=`<i style="background:${i<fill?bcol(p):'#dfe2e7'}"></i>`;$('#segs').innerHTML=seg;
-  $('#pct').innerHTML=(p??'—')+'<small>%</small>';
-  $('#range').innerHTML=(R.turbo!=null?`${R.turbo}–${R.eco}`:'—')+'<small> km</small>';
+  $('#pct').innerHTML=esc(p??'—')+'<small>%</small>';
+  $('#range').innerHTML=(R.turbo!=null?`${esc(R.turbo)}–${esc(R.eco)}`:'—')+'<small> km</small>';
   $('#mode').textContent=L.mode||'—';const mp=$('#modePill');
   if(L.mode){mp.style.display='';mp.style.background=(MC[L.mode]||'#888')+'22';mp.style.color=MC[L.mode]||'#888';mp.textContent=L.mode;}else mp.style.display='none';
   const order=[['turbo','TURBO'],['auto','AUTO'],['tour','TOUR+'],['eco','ECO']];
-  $('#ranges').innerHTML=order.map(([k,n])=>`<div><div class=m style="color:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#555'}">${n}</div><div class=v>${R[k]??'—'}<small> km</small></div></div>`).join('');
+  $('#ranges').innerHTML=order.map(([k,n])=>`<div><div class=m style="color:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#555'}">${n}</div><div class=v>${esc(R[k]??'—')}<small> km</small></div></div>`).join('');
   const rsum=order.reduce((a,[k])=>a+(R[k]||0),0)||1;
   $('#rangeBar').innerHTML=order.map(([k,n])=>`<i style="width:${(R[k]||0)/rsum*100}%;background:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#999'}"></i>`).join('');
   $('#service').textContent=L.next_service!=null?L.next_service+' km':'—';
   $('#odo').textContent=L.odometer!=null?L.odometer.toLocaleString('nl-NL')+' km':'—';
   // technical info — Kiox (Bosch hub) vs GPS module, separate devices/MACs
   const dl=rows=>{const r=rows.filter(([k,v])=>v!=null&&v!=='');return r.length
-    ?'<dl class=tech>'+r.map(([k,v])=>`<dt>${t(k)}</dt><dd>${v}</dd>`).join('')+'</dl>'
+    ?'<dl class=tech>'+r.map(([k,v])=>`<dt>${t(k)}</dt><dd>${v&&v.html?v.html:esc(v)}</dd>`).join('')+'</dl>'
     :`<div class=muted style="margin:2px 0 6px">${t('no_reading')}</div>`;};
   const kiox=[['t_pname',L.product_name],['t_color',L.product_color],['t_model',di.model||L.model_number],['t_frame',L.frame_number],['t_sku',L.sku],['t_pcode',L.product_code],['t_part',L.part_number||di.serial],['t_hubfw',L.hub_firmware||di.firmware],['t_addr',L.address||s.bike]];
-  const gco=(L.cloud&&L.cloud.latitude!=null)?(`<a href="https://www.openstreetmap.org/?mlat=${L.cloud.latitude}&mlon=${L.cloud.longitude}#map=16/${L.cloud.latitude}/${L.cloud.longitude}" target=_blank rel=noopener>${L.cloud.latitude.toFixed(5)}, ${L.cloud.longitude.toFixed(5)}</a> ☁️`):null;
+  const gla=Number(L.cloud&&L.cloud.latitude),glo=Number(L.cloud&&L.cloud.longitude);
+  const gco=(L.cloud&&L.cloud.latitude!=null&&isFinite(gla)&&isFinite(glo))?{html:`<a href="https://www.openstreetmap.org/?mlat=${gla}&mlon=${glo}#map=16/${gla}/${glo}" target=_blank rel=noopener>${gla.toFixed(5)}, ${glo.toFixed(5)}</a> ☁️`}:null;
   const gps=[['t_mac',s.tracker||L.module_mac],['t_modfw',L.module_firmware],['t_hw',L.module_hardware],['t_mfr',L.module_manufacturer],['t_batt',L.tracker_battery!=null?L.tracker_battery+'%':null],['t_gps',gco]];
   $('#techInfo').innerHTML=`<div class=th>${t('tech_kiox')}</div>`+dl(kiox)+`<div class=th>${t('tech_gps')}</div>`+dl(gps);
   // components — name + firmware + production date per subsystem
@@ -3264,7 +3547,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
       [t('b_motor'),BO.motor_hours!=null?BO.motor_hours+' h':'—'],
       [t('b_service'),BO.next_service_km!=null?BO.next_service_km+' km':'—'],
       [t('b_sw'),BO.software_version||'—']];
-    $('#boschStats').innerHTML=bs.map(([m,v])=>`<div><div class=m>${m}</div><div class=v>${v}</div></div>`).join('');
+    $('#boschStats').innerHTML=bs.map(([m,v])=>`<div><div class=m>${esc(m)}</div><div class=v>${esc(v)}</div></div>`).join('');
     $('#boschUpd').textContent=BO.ts?ago(BO.ts):'';}
   else $('#boschCard').style.display='none';
   // Activities (usage/movement) log — newest first. Card shows once PON is active
@@ -3275,13 +3558,14 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
       const lab={ride_start:t('act_ride_start'),ride_stop:t('act_ride_stop'),left_home:t('act_left_home'),arrived_home:t('act_arrived_home'),moved:t('act_moved')};
       const ico={ride_start:'🚴',ride_stop:'🅿️',left_home:'➡️',arrived_home:'🏠',moved:'📍'};
       $('#actList').innerHTML=AL.slice().reverse().slice(0,25).map(e=>{
-        const loc=(e.lat!=null)?` · <a href="https://www.openstreetmap.org/?mlat=${e.lat}&mlon=${e.lon}#map=17/${e.lat}/${e.lon}" target=_blank rel=noopener>kaart</a>`:'';
-        const dist=(e.dist!=null)?` (${e.dist} m)`:'';
-        return `<div style="padding:7px 0;border-top:1px solid var(--line);font-size:14px"><span class=muted>${rel(e.ts)}</span> — ${ico[e.type]||'•'} ${lab[e.type]||e.type}${dist}${loc}</div>`;}).join('');
+        const ela=Number(e.lat),elo=Number(e.lon);
+        const loc=(e.lat!=null&&isFinite(ela)&&isFinite(elo))?` · <a href="https://www.openstreetmap.org/?mlat=${ela}&mlon=${elo}#map=17/${ela}/${elo}" target=_blank rel=noopener>kaart</a>`:'';
+        const dist=(e.dist!=null)?` (${esc(e.dist)} m)`:'';
+        return `<div style="padding:7px 0;border-top:1px solid var(--line);font-size:14px"><span class=muted>${esc(rel(e.ts))}</span> — ${ico[e.type]||'•'} ${esc(lab[e.type]||e.type)}${dist}${loc}</div>`;}).join('');
     }else $('#actList').innerHTML=`<span class=muted>${t('act_none')}</span>`;}
   else $('#actCard').style.display='none';
   // Cloud-accounts status (More info) — shows the three layers are coupled apart
-  const accRow=(k,on,extra)=>`<dt>${k}</dt><dd>${on?t('acc_linked')+(extra?' · '+extra:''):t('acc_off')}</dd>`;
+  const accRow=(k,on,extra)=>`<dt>${k}</dt><dd>${on?t('acc_linked')+(extra?' · '+esc(extra):''):t('acc_off')}</dd>`;
   $('#cloudAcc').innerHTML='<dl class=tech>'+
     accRow(t('acc_ble'),!!(s.bike||L.address),(L.address||s.bike||''))+
     accRow(t('acc_pon'),!!L.cloud,'')+
@@ -3292,7 +3576,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const cloudC=(L.cloud&&L.cloud.module_charge!=null)?L.cloud.module_charge:null;
   const tbv=(cloudC!=null)?cloudC:L.tracker_battery;
   const battSrc=(cloudC!=null)?'<span class=src title=Cloud>☁️</span>':(L.tracker_battery!=null?'<span class=src title=Bluetooth>📶</span>':'');
-  $('#gpsBatt').innerHTML=(tbv!=null?tbv:'—')+'<small>%</small>'+battSrc;
+  $('#gpsBatt').innerHTML=esc(tbv!=null?tbv:'—')+'<small>%</small>'+battSrc;
   const gUpd=(cloudC!=null)?(L.cloud&&L.cloud.ts):L.tracker_updated;
   $('#gpsUpd').textContent=gUpd?ago(gUpd):t('no_reading');
   const gc=$('#gpsConn');const CLp=L.cloud;
@@ -3364,12 +3648,12 @@ async function scan(kind,box){box=box||(kind=='bike'?'#bikes':'#trackers');
   items.forEach(d=>{
    if(kind=='bike'){
      const c=document.createElement('div');c.className='biketile';
-     c.innerHTML=`<img src=bike.png class=btimg><div class=btinfo><b class=bname>Bosch Smart System eBike</b><div class=muted style="font-size:12px">${d.address} · ${d.rssi} dBm</div><div class=mtag style="font-size:12px;color:#43a047;margin-top:2px"></div></div><button class=btadd>${t('add_bike')}</button>`;
+     c.innerHTML=`<img src=bike.png class=btimg><div class=btinfo><b class=bname>Bosch Smart System eBike</b><div class=muted style="font-size:12px">${esc(d.address)} · ${esc(d.rssi)} dBm</div><div class=mtag style="font-size:12px;color:#43a047;margin-top:2px"></div></div><button class=btadd>${t('add_bike')}</button>`;
      c.querySelector('.btadd').onclick=()=>addBike(d,c);
      els[d.address]=c;$(box).appendChild(c);
    }else{
      const el=document.createElement('div');el.className='row';
-     el.innerHTML=`<div><b>${d.name||kind}</b><div class=muted style="font-size:12px">${fmt(d)}</div></div>`;
+     el.innerHTML=`<div><b>${esc(d.name||kind)}</b><div class=muted style="font-size:12px">${esc(fmt(d))}</div></div>`;
      el.onclick=()=>{pick[kind]=d;[...$(box).children].forEach(c=>c.classList.remove('sel'));el.classList.add('sel');$('#trackerActions').classList.remove('hidden')};
      els[d.address]=el;$(box).appendChild(el);
    }});
@@ -3468,6 +3752,7 @@ async def _ui_alarm(request):
            "ARM_HOME": "armed_home"}.get((data.get("cmd") or "").upper())
     if not new:
         return web.json_response({"ok": False}, status=400)
+    _alarm["restored"] = True            # a user action wins over a late retained state
     _alarm["state"] = new
     _alarm["fired"] = False
     if new in ARMED_STATES:
@@ -3477,7 +3762,7 @@ async def _ui_alarm(request):
 
 
 async def _ui_refresh_tracker(_request):
-    asyncio.create_task(read_tracker_battery())  # one-shot, single-flighted
+    _spawn(read_tracker_battery(proactive=False), "tracker_refresh")  # single-flighted
     return web.json_response({"ok": True})
 
 
@@ -3671,16 +3956,50 @@ async def _ui_tile(request):
         return web.Response(status=502)
 
 
-async def start_web() -> None:
-    if web is None:
-        log.warning("setup UI unavailable (aiohttp missing)")
-        return
-    app = web.Application()
+# Home Assistant's ingress gateway (Supervisor) — the only legitimate client. The
+# UI has no login of its own, so without this check any other add-on container on
+# the internal network could arm/disarm the alarm or remove the bike.
+INGRESS_PEERS = frozenset({"172.30.32.2", "127.0.0.1", "::1"})
+
+
+def _peer_allowed(remote: "str | None") -> bool:
+    if not remote:
+        return False
+    if remote.startswith("::ffff:"):             # IPv4-mapped IPv6
+        remote = remote[7:]
+    return remote in INGRESS_PEERS
+
+
+_refused_peers: set = set()
+
+if web is not None:
+    @web.middleware
+    async def _ingress_only(request, handler):
+        if not _peer_allowed(request.remote):
+            if request.remote not in _refused_peers:     # once per client
+                _refused_peers.add(request.remote)
+                log.warning("UI: refused request from %s (not the HA ingress)",
+                            request.remote)
+            return web.Response(status=403, text="Use the panel in Home Assistant.")
+        return await handler(request)
+
+
+def make_app() -> "web.Application":
+    """The ingress panel + its JSON API."""
+    app = web.Application(middlewares=[_ingress_only])
+    async def index(_request):
+        return web.Response(text=INDEX_HTML, content_type="text/html")
+
+    def static(path: str):
+        async def handler(_request):
+            return web.FileResponse(path)
+        return handler
+
     app.add_routes([
-        web.get("/", lambda r: web.Response(text=INDEX_HTML, content_type="text/html")),
-        web.get("/bike.png", lambda r: web.FileResponse("/bike.png")),
-        web.get("/leaflet.js", lambda r: web.FileResponse("/leaflet.js")),
-        web.get("/leaflet.css", lambda r: web.FileResponse("/leaflet.css")),
+        web.get("/", index),
+        web.get("/bike.png", static("/bike.png")),
+        web.get("/leaflet.js", static("/leaflet.js")),
+        web.get("/leaflet.css", static("/leaflet.css")),
         web.get("/tile/{z}/{x}/{y}", _ui_tile),
         web.get("/api/status", _ui_status),
         web.post("/api/scan", _ui_scan),
@@ -3695,7 +4014,14 @@ async def start_web() -> None:
         web.get("/api/sensors", _ui_sensors),
         web.post("/api/sensors", _ui_set_sensors),
     ])
-    runner = web.AppRunner(app)
+    return app
+
+
+async def start_web() -> None:
+    if web is None:
+        log.warning("setup UI unavailable (aiohttp missing)")
+        return
+    runner = web.AppRunner(make_app())
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", INGRESS_PORT).start()
     log.info("setup UI listening on :%s", INGRESS_PORT)
@@ -3722,19 +4048,24 @@ async def main() -> None:
         await start_web()
     except Exception as err:  # noqa: BLE001 - UI must never block the reader
         log.warning("setup UI failed to start: %s", err)
-    # Give the retained alarm state a moment to restore, then assert it so the
-    # panel always has a value (defaults to disarmed on a first-ever run).
-    await asyncio.sleep(2)
-    publish_alarm(_alarm["state"])  # type: ignore[arg-type]
+    # Restore the alarm from the broker's retained state before the sensors can act
+    # on it (defaults to disarmed on a first-ever run). If the broker isn't up yet,
+    # start anyway: the restore completes in the background once it connects.
+    restore = _spawn(_alarm_restore(), "alarm_restore")
+    try:
+        await asyncio.wait_for(asyncio.shield(restore), timeout=30)
+    except asyncio.TimeoutError:
+        log.warning("MQTT broker %s:%s not reachable yet — starting anyway, "
+                    "connecting in the background", MQTT_HOST, MQTT_PORT)
     await start_motion(_mqtt)
     # One-time tracker battery read at startup so the module % is always shown
     # (it then refreshes when the bike is on or the alarm is armed, idle otherwise).
-    asyncio.create_task(read_tracker_battery())
-    asyncio.create_task(_persist_last_loop())   # keep the on-disk snapshot fresh
-    asyncio.create_task(adv_probe_loop())       # dev: passive adv logging when enabled
-    asyncio.create_task(pon_cloud_loop())       # additive cloud poll (no BLE)
-    asyncio.create_task(bosch_cloud_loop())     # additive Bosch health/service poll
-    await ble_loop(_mqtt)
+    _spawn(read_tracker_battery(), "tracker_battery_startup")
+    _supervise("persist_last", _persist_last_loop)   # keep the on-disk snapshot fresh
+    _supervise("adv_probe", adv_probe_loop)      # dev: passive adv logging when enabled
+    _supervise("pon_cloud", pon_cloud_loop)      # additive cloud poll (no BLE)
+    _supervise("bosch_cloud", bosch_cloud_loop)  # additive Bosch health/service poll
+    await _run_forever("ble_loop", lambda: ble_loop(_mqtt))
 
 
 if __name__ == "__main__":
