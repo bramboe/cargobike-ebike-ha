@@ -16,16 +16,12 @@ configuration:
   comodule_address:
     name: Tracker module MAC
     description: >-
-      COMODULE/URBANARROW tracker module MAC (for motion). Leave empty to
-      auto-detect, or pick the tracker in the panel.
+      COMODULE/URBANARROW GPS module MAC, used to recognise its Bluetooth
+      advertisement (presence). Leave empty to auto-detect, or pick the tracker in
+      the panel.
   motion_off_delay:
     name: Motion clear delay (seconds)
-    description: Seconds of stillness before the motion sensor turns off.
-  tracker_always_on:
-    name: Keep tracker connected always
-    description: >-
-      Off (default) saves the tracker's own battery by connecting only while the
-      alarm is armed. Turn on for live motion even when disarmed.
+    description: Seconds of stillness before an external motion sensor's motion turns off.
   presence_alarm:
     name: Presence alarm (out of range)
     description: >-
@@ -85,13 +81,6 @@ configuration:
     description: >-
       OAuth refresh token from tools/bosch_login.py (one-time SingleKey ID login). The
       add-on uses it to fetch access tokens automatically; rotated tokens are reused.
-  probe_frames:
-    name: COMODULE probe (developer)
-    description: >-
-      Developer/diagnostic only. Logs the COMODULE 155e status frames and keeps
-      the tracker connected to reverse-engineer signals (e.g. the main-battery
-      flag). Drains the module battery faster — leave OFF for normal use. A banner
-      shows in the panel while it is on.
   motion_test:
     name: Motion test (developer)
     description: >-

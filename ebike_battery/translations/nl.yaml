@@ -17,17 +17,12 @@ configuration:
   comodule_address:
     name: Module-MAC tracker
     description: >-
-      Module-MAC van de COMODULE/URBANARROW-tracker (voor beweging). Leeg laten
-      om automatisch te detecteren, of kies de tracker in het paneel.
+      Module-MAC van de COMODULE/URBANARROW GPS-module, om zijn Bluetooth-
+      advertentie te herkennen (aanwezigheid). Leeg laten om automatisch te
+      detecteren, of kies de tracker in het paneel.
   motion_off_delay:
     name: Beweging-uit vertraging (seconden)
-    description: Aantal seconden stilstand voordat de bewegingssensor uit gaat.
-  tracker_always_on:
-    name: Tracker altijd verbonden houden
-    description: >-
-      Uit (standaard) spaart de eigen accu van de tracker door alleen te
-      verbinden wanneer het alarm scherp staat. Aan = live beweging, ook
-      wanneer disarmed.
+    description: Aantal seconden stilstand voordat de beweging van een externe sensor uit gaat.
   presence_alarm:
     name: Aanwezigheids-alarm (buiten bereik)
     description: >-
@@ -88,13 +83,6 @@ configuration:
     description: >-
       OAuth refresh-token uit tools/bosch_login.py (eenmalige SingleKey ID-login). De
       add-on haalt daarmee automatisch access-tokens op; geroteerde tokens worden hergebruikt.
-  probe_frames:
-    name: COMODULE-probe (ontwikkelaar)
-    description: >-
-      Alleen voor ontwikkeling/diagnostiek. Logt de COMODULE 155e-statusframes en
-      houdt de tracker verbonden om signalen te reverse-engineeren (bijv. de
-      hoofdaccu-vlag). Laat de module-accu sneller leeglopen — laat UIT bij normaal
-      gebruik. Zolang 'ie aan staat verschijnt een melding in het paneel.
   motion_test:
     name: Beweegtest (ontwikkelaar)
     description: >-

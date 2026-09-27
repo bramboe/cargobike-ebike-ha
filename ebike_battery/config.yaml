@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.66.0"
+version: "2.67.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
@@ -28,7 +28,6 @@ options:
   cooldown: 120
   comodule_address: ""
   motion_off_delay: 12
-  tracker_always_on: false
   presence_alarm: true
   presence_alarm_seconds: 45
   ble_proxy_host: ""
@@ -40,7 +39,6 @@ options:
   pon_poll: 120
   bosch_client_id: ""
   bosch_refresh_token: ""
-  probe_frames: false
   motion_test: false
   mqtt_host: ""
   mqtt_port: 1883
@@ -50,13 +48,11 @@ schema:
   # The bike is added via the panel GUI (scan → add), not here. Its selection and
   # name are stored by the add-on; there is no bike address/name option anymore.
   cooldown: int
-  # COMODULE/URBANARROW motion tracker. Empty = auto-detect by name. Seconds of
-  # stillness before motion clears.
+  # COMODULE/URBANARROW GPS module (heard for presence, never held connected).
+  # Empty = auto-detect by name. motion_off_delay = seconds of stillness before an
+  # external motion sensor clears.
   comodule_address: str?
   motion_off_delay: int?
-  # Keep the tracker connected always (live motion when disarmed too). Default
-  # off = only while armed, to save the tracker's own battery.
-  tracker_always_on: bool?
   # Passive anti-theft: when armed, trip the alarm if the tracker advertisement
   # disappears (bike taken out of BLE range). Connection-free = no module drain.
   presence_alarm: bool?
@@ -81,10 +77,6 @@ schema:
   # battery SoH / cycles / next service; PON stays the GPS/live fallback.
   bosch_client_id: str?
   bosch_refresh_token: str?
-  # TEMPORARY diagnostic: log distinct COMODULE 155e status frames to find which
-  # byte flips when the main battery is removed/inserted. Keeps the tracker
-  # connected (no need to arm). Turn off again after the test.
-  probe_frames: bool?
   # TEMPORARY diagnostic: connection-free motion test — logs the tracker advert,
   # the Bosch hub advert and PON cloud changes while you move the bike. Holds the
   # BLE adapter (reads + presence pause). Turn off again after the test.

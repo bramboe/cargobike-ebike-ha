@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.67.0 — no more Bluetooth connection to the GPS module
+
+**Removed: Bluetooth motion detection ("Tracker motion")**
+Motion over Bluetooth needed a permanent connection to the GPS module, which
+drained its battery. Two deliberate motion tests (27 Sep) confirmed that the
+module's advertisement gives nothing away: content, rate and signal strength
+stay the same while the bike is moved. So the add-on no longer connects to the
+module for motion. It only connects briefly, when the bike is switched on, to
+read the module's battery level.
+- Removed the *Tracker motion* sensor row, the `tracker_always_on` and
+  `probe_frames` options, and the low-module-battery auto-disarm (nothing drains
+  the module any more).
+- The *Motion* sensor still works for external sensors mounted on the bike.
+
+**New: logging GPS module reports from the PON cloud (logging only)**
+When moved, the module reports to the PON cloud on its own: new position and
+state within about 30 s. While the alarm is armed the add-on now checks PON
+every 30 s and logs every change (`PON module report`). This is logging only,
+no alarm yet. The data shows how routine reports differ from reports caused by
+movement.
+
 ## 2.66.0 — one motion test instead of two probes
 
 - New developer option **Motion test** (`motion_test`), replacing *Advertisement
