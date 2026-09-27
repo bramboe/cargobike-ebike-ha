@@ -88,8 +88,8 @@ PRESENCE_GRACE = float(os.getenv("PRESENCE_GRACE", "600"))
 PRESENCE_GAP = float(os.getenv("PRESENCE_GAP", "20"))
 # While ARMED the alarm fires sooner: once the tracker has been unheard this long
 # (the "in range" sensor keeps the longer PRESENCE_GRACE). Tune it against the
-# "Longest silence (24h)" sensor — it must stay well above that value.
-PRESENCE_ALARM_GRACE = float(os.getenv("PRESENCE_ALARM_GRACE", "30") or 30)
+# "Longest silence while armed (24h)" sensor: keep it >= 1.5x that value.
+PRESENCE_ALARM_GRACE = float(os.getenv("PRESENCE_ALARM_GRACE", "45") or 45)
 # Scan cadence per mode (see _presence_mode). Guard = armed: near-continuous
 # listening so a short alarm delay is safe (costs only the HA adapter, never the
 # module). Paused = a fresh GPS fix says the bike is away: no point listening
@@ -1372,12 +1372,13 @@ def _publish_discovery(client: mqtt.Client) -> None:
                   "last_service_dealer", "next_service_km"):
         client.publish(f"{DISC_PREFIX}/sensor/{NODE}/{_gone}/config", "", retain=True)
 
-    # Presence diagnostic: longest silence while the tracker was in range (24 h).
-    # The armed-alarm grace (presence_alarm_minutes) must stay well above this.
+    # Presence diagnostic: longest silence while armed and in range (24 h), i.e.
+    # measured at the guard cadence that decides false alarms. Keep the armed
+    # grace (presence_alarm_seconds) at >= 1.5x this value.
     client.publish(
         f"{DISC_PREFIX}/sensor/{NODE}/presence_gap/config",
         json.dumps({
-            "name": "Longest silence (24h)",
+            "name": "Longest silence while armed (24h)",
             "unique_id": f"{NODE}_presence_gap",
             "state_topic": PRESENCE_GAP_TOPIC,
             "unit_of_measurement": "s",
@@ -2294,9 +2295,11 @@ async def scan_tracker_present(timeout: float = 8.0) -> bool:
 # present: last published "in range"; had: the tracker was heard since start (or
 # restored as present) — the alarm only fires on a real present -> gone edge;
 # alarm_edge: already fired for the current absence; gaps: (ts, silence) of the
-# last 24 h, for the "Longest silence" diagnostic.
+# last 24 h measured while guarding, for the "Longest silence" diagnostic;
+# mode/guard_since: current scan cadence and when guarding started.
 _pres: dict = {"present": None, "had": False, "alarm_edge": False,
-               "prev_seen": 0.0, "gaps": [], "gap_pub": None, "mode": None}
+               "prev_seen": 0.0, "gaps": [], "gap_pub": None, "mode": None,
+               "guard_since": 0.0}
 # Latest GPS verdict from the PON poll: home (inside zone.home) and when polled.
 _cloud_home: dict = {"home": None, "at": 0.0}
 
@@ -2336,7 +2339,10 @@ def _presence_eval(now: float) -> None:
     p = _pres
     seen = _tracker_seen_ts
     if seen > p["prev_seen"]:                       # a fresh hit since last round
-        if p["prev_seen"] > 0 and seen - p["prev_seen"] < PRESENCE_GRACE:
+        # Only gaps fully inside a guard stretch: the slower disarmed cadence
+        # would overstate the silences that matter for false alarms.
+        if (p["mode"] == "guard" and 0 < p["guard_since"] <= p["prev_seen"]
+                and seen - p["prev_seen"] < PRESENCE_GRACE):
             p["gaps"].append((seen, seen - p["prev_seen"]))
         p["prev_seen"] = seen
         p["had"] = True
@@ -2393,6 +2399,7 @@ async def presence_loop() -> None:
             if mode != _pres["mode"]:
                 log.info("presence scan: %s", mode)
                 _pres["mode"] = mode
+                _pres["guard_since"] = time.time() if mode == "guard" else 0.0
             # Seen by any source? Held connection or a scan hit (_record stamps
             # _tracker_seen_ts for every scan); the remote BLE proxy does too.
             if _last.get("tracker_connected"):

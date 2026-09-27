@@ -15,7 +15,7 @@ def p(r, fake_mqtt, monkeypatch):
     """Reader with fresh presence state and a presence sensor that may alarm."""
     monkeypatch.setattr(r, "_pres", {"present": None, "had": False, "alarm_edge": False,
                                      "prev_seen": 0.0, "gaps": [], "gap_pub": None,
-                                     "mode": None})
+                                     "mode": None, "guard_since": 0.0})
     monkeypatch.setattr(r, "_cloud_home", {"home": None, "at": 0.0})
     monkeypatch.setattr(r, "_discovered", {})
     monkeypatch.setattr(r, "_tracker_mac", "94:80:58:6E:BE:E9")
@@ -98,6 +98,7 @@ def test_hearing_it_again_rearms_the_edge(p):
 
 
 def test_longest_silence_is_published_and_ages_out(p, fake_mqtt):
+    p._pres.update(mode="guard", guard_since=T0 - 1)
     for at in (T0, T0 + 20, T0 + 140, T0 + 160):
         hear(p, at)
         p._presence_eval(at)
@@ -105,6 +106,18 @@ def test_longest_silence_is_published_and_ages_out(p, fake_mqtt):
     hear(p, T0 + 90_000)                            # next day; old gaps expire
     p._presence_eval(T0 + 90_000)
     assert fake_mqtt.topic(p.PRESENCE_GAP_TOPIC)[-1] == "0"
+
+
+def test_longest_silence_only_counts_while_guarding(p, fake_mqtt):
+    p._pres["mode"] = "normal"                      # disarmed: slow cadence
+    for at in (T0, T0 + 28, T0 + 56):
+        hear(p, at)
+        p._presence_eval(at)
+    p._pres.update(mode="guard", guard_since=T0 + 60)
+    for at in (T0 + 70, T0 + 82, T0 + 86):          # 56->70 straddles arming
+        hear(p, at)
+        p._presence_eval(at)
+    assert fake_mqtt.topic(p.PRESENCE_GAP_TOPIC)[-1] == "12"   # not 28 or 14
 
 
 async def test_status_reports_passive_guard(p, monkeypatch):

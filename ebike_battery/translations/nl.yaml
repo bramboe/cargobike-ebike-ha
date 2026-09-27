@@ -41,9 +41,9 @@ configuration:
     name: Vertraging aanwezigheids-alarm (seconden)
     description: >-
       Hoe lang de GPS-module niet gehoord mag worden terwijl het alarm scherp staat
-      voordat het alarm afgaat. Standaard 30. Als het alarm scherp staat luistert de
-      add-on vrijwel continu; krijg je vals alarm, kijk dan naar de sensor "Langste
-      stilte (24u)" en zet dit daarboven.
+      voordat het alarm afgaat. Standaard 45. Als het alarm scherp staat luistert de
+      add-on vrijwel continu. Houd dit minstens 1,5x de sensor "Longest silence
+      while armed (24h)".
   ble_proxy_host:
     name: BLE-proxy host (optioneel)
     description: >-
