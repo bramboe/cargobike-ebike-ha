@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.64.0 — 30-second guard, pauses while the bike is away
+
+- **Alarm after 30 s instead of 5 min.** While armed, the add-on listens for the
+  GPS module almost continuously (10 s scans, 2 s apart), so the alarm goes off
+  about 30–45 s after the bike leaves. The option is now
+  `presence_alarm_seconds` (15–3600, default 30). The extra listening uses Home
+  Assistant's Bluetooth adapter, not the module battery.
+- **Listening pauses while GPS says the bike is away.** If a recent PON GPS
+  position puts the bike outside your home zone and Bluetooth can't hear it, the
+  add-on stops scanning. It starts again as soon as GPS puts the bike home, or
+  when the GPS position is more than 10 minutes old.
+- Every Bluetooth scan the add-on makes now counts as hearing the module, not
+  only the presence scan. A bike scan that keeps the adapter busy no longer
+  looks like silence (which could have caused a false alarm at 30 s).
+
 ## 2.63.0 — passive anti-theft guard & cleanup
 
 **Passive guard (no connection, no extra GPS-module battery)**
