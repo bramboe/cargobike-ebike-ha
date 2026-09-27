@@ -38,9 +38,9 @@ configuration:
     name: Presence alarm delay (seconds)
     description: >-
       How long the GPS module may go unheard while the alarm is armed before the
-      alarm goes off. Default 30. While armed the add-on listens almost
-      continuously; if you get false alarms, check the "Longest silence (24h)"
-      sensor and raise this above it.
+      alarm goes off. Default 45. While armed the add-on listens almost
+      continuously. Keep this at least 1.5x the "Longest silence while armed
+      (24h)" sensor.
   ble_proxy_host:
     name: BLE proxy host (optional)
     description: >-

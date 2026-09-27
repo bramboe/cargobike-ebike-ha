@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.65.0 — 45-second guard, silence measured while armed
+
+- The presence alarm now goes off after **45 s** by default (was 30). While
+  armed that allows three missed scans in a row before a false alarm. A thief is
+  about 40–60 m further away than at 30 s, and GPS tracks the bike from there.
+- The *Longest silence while armed (24h)* sensor (was *Longest silence (24h)*)
+  now only counts gaps measured while the alarm is armed. The slower disarmed
+  scanning overstated the silences that cause false alarms. Rule of thumb: keep
+  the delay at least 1.5× this value. It reads 0 until the alarm has been armed.
+
 ## 2.64.0 — 30-second guard, pauses while the bike is away
 
 - **Alarm after 30 s instead of 5 min.** While armed, the add-on listens for the

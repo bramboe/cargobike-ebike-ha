@@ -48,9 +48,9 @@ export MOTION_OFF_DELAY="$(bashio::config 'motion_off_delay')"
 if bashio::config.true 'tracker_always_on'; then export TRACKER_ALWAYS=1; else export TRACKER_ALWAYS=0; fi
 # Passive presence anti-theft: trip the alarm when the tracker leaves BLE range.
 if bashio::config.false 'presence_alarm'; then export PRESENCE_ALARM=0; else export PRESENCE_ALARM=1; fi
-# Seconds unheard (while armed) before the presence alarm trips; default 30.
+# Seconds unheard (while armed) before the presence alarm trips; default 45.
 PAS="$(bashio::config 'presence_alarm_seconds')"
-if [[ -z "$PAS" || "$PAS" == "null" ]]; then PAS=30; fi
+if [[ -z "$PAS" || "$PAS" == "null" ]]; then PAS=45; fi
 export PRESENCE_ALARM_GRACE="$PAS"
 # TEMPORARY: log distinct COMODULE 155e status frames (find the main-battery flag).
 if bashio::config.true 'probe_frames'; then export PROBE_FRAMES=1; else export PROBE_FRAMES=0; fi
