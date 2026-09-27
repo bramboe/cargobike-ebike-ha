@@ -37,6 +37,12 @@ configuration:
       sensor "in bereik" werkt ook als het alarm uit staat. Het detecteert dat de
       fiets de buurt VERLAAT, niet schudden ter plekke (dat vereist de
       bewegingssensor terwijl het alarm scherp staat).
+  presence_alarm_minutes:
+    name: Vertraging aanwezigheids-alarm (minuten)
+    description: >-
+      Hoe lang de GPS-module niet gehoord mag worden terwijl het alarm scherp staat
+      voordat het alarm afgaat. Standaard 5. Kijk naar de sensor "Langste stilte
+      (24u)" om de normale gaten op jouw plek te zien voordat je dit verlaagt.
   ble_proxy_host:
     name: BLE-proxy host (optioneel)
     description: >-

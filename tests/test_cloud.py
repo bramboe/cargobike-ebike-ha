@@ -125,7 +125,6 @@ async def _run_polls(r, monkeypatch, fake: FakePon, polls: int) -> None:
     monkeypatch.setenv("PON_REFRESH", "refresh-1")
     monkeypatch.setattr(r, "PON_POLL", 0.01)
     monkeypatch.setattr(r, "PON_POLL_HOME", 0.01)
-    monkeypatch.setattr(r, "_pon_dumped", True)
     monkeypatch.setattr(r, "_http_json", fake.http_json)
     monkeypatch.setattr(r, "_ha_get", ha_get)
     task = asyncio.create_task(r.pon_cloud_loop())

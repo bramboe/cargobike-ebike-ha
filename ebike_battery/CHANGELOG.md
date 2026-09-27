@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.63.0 — passive anti-theft guard & cleanup
+
+**Passive guard (no connection, no extra GPS-module battery)**
+- While the alarm is armed, the alarm goes off as soon as the GPS module hasn't
+  been heard for 5 minutes (setting `presence_alarm_minutes`, 1–60). This only
+  listens for the module's Bluetooth advertisement and never connects to it.
+- The alarm now carries a `reason` attribute (e.g. `presence`), so automations
+  can send a different, urgent message when the bike is gone.
+- New diagnostic sensor *Longest silence (24h)*: the longest normal gap between
+  two sightings. Check it before you lower the delay.
+- A restart no longer briefly reports the bike as *out of range*.
+- If *Tracker motion* is off under Sensors, the panel shows "Passive guard"
+  instead of the battery warning.
+
+**Cleanup**
+- Removed the one-off PON module-ID dump and the Bosch theft-log line.
+- Removed the duplicate *Next service in* sensor. The Bosch cloud value remains.
+- Removed `tools/pon_probe.py`. Reusing the add-on's PON token from outside the
+  add-on could break it.
+
 ## 2.62.0 — stability & security review
 
 **Ride detection works again**
