@@ -34,12 +34,13 @@ configuration:
       range). Connection-free, so it costs the module no extra battery and the
       "In range" sensor works even while disarmed. It detects the bike LEAVING
       the area, not shaking it in place (that needs the motion sensor while armed).
-  presence_alarm_minutes:
-    name: Presence alarm delay (minutes)
+  presence_alarm_seconds:
+    name: Presence alarm delay (seconds)
     description: >-
       How long the GPS module may go unheard while the alarm is armed before the
-      alarm goes off. Default 5. Check the "Longest silence (24h)" sensor to see
-      the normal gaps at your spot before lowering it.
+      alarm goes off. Default 30. While armed the add-on listens almost
+      continuously; if you get false alarms, check the "Longest silence (24h)"
+      sensor and raise this above it.
   ble_proxy_host:
     name: BLE proxy host (optional)
     description: >-

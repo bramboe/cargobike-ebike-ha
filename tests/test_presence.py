@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,7 +14,11 @@ T0 = 1_000_000.0
 def p(r, fake_mqtt, monkeypatch):
     """Reader with fresh presence state and a presence sensor that may alarm."""
     monkeypatch.setattr(r, "_pres", {"present": None, "had": False, "alarm_edge": False,
-                                     "prev_seen": 0.0, "gaps": [], "gap_pub": None})
+                                     "prev_seen": 0.0, "gaps": [], "gap_pub": None,
+                                     "mode": None})
+    monkeypatch.setattr(r, "_cloud_home", {"home": None, "at": 0.0})
+    monkeypatch.setattr(r, "_discovered", {})
+    monkeypatch.setattr(r, "_tracker_mac", "94:80:58:6E:BE:E9")
     monkeypatch.setattr(r, "_alarm_off", False)
     monkeypatch.setattr(r, "_motion_src", {})
     monkeypatch.setattr(r, "_src_off_since", {})
@@ -108,4 +113,54 @@ async def test_status_reports_passive_guard(p, monkeypatch):
     resp = await p._ui_status(None)
     body = json.loads(resp.body)
     assert body["passive_guard"] is True
-    assert body["alarm_grace_min"] == 5
+    assert body["alarm_grace_s"] == 300
+
+
+# ------------------------------------------------------------ scan cadence
+
+
+def test_armed_bike_at_home_is_guarded(p):
+    hear(p, T0)
+    p._alarm["state"] = "armed_night"
+    assert p._presence_mode(T0 + 5) == "guard"
+    p._alarm["state"] = "disarmed"
+    assert p._presence_mode(T0 + 5) == "normal"
+
+
+def test_fresh_gps_away_pauses_listening(p):
+    hear(p, T0)
+    p._cloud_home.update(home=False, at=T0 + 200)
+    assert p._presence_mode(T0 + 300) == "paused"
+    p._alarm["state"] = "armed_away"                # armed but gone: still paused
+    assert p._presence_mode(T0 + 300) == "paused"
+
+
+def test_listening_resumes_when_gps_says_home_or_goes_stale(p):
+    p._cloud_home.update(home=False, at=T0)
+    assert p._presence_mode(T0 + 60) == "paused"
+    assert p._presence_mode(T0 + p.CLOUD_FRESH_S + 1) == "normal"   # stale fix
+    p._cloud_home.update(home=True, at=T0 + 100)
+    assert p._presence_mode(T0 + 120) == "normal"
+
+
+def test_heard_over_ble_never_pauses(p):
+    p._cloud_home.update(home=False, at=T0)         # GPS lags behind the arrival
+    hear(p, T0 + 10)
+    assert p._presence_mode(T0 + 20) == "normal"
+
+
+def _advert(name: str, module_mac: str):
+    mac = bytes(int(x, 16) for x in module_mac.split(":"))
+    return (SimpleNamespace(address="DE:34:00:00:00:01", name=name),
+            SimpleNamespace(rssi=-70, manufacturer_data={0x020F: mac + b"\x00\x01"}))
+
+
+def test_any_scan_hearing_our_tracker_counts_for_presence(p, monkeypatch):
+    monkeypatch.setattr(p.time, "time", lambda: T0)
+    p._record(*_advert("URBANARROW", "94:80:58:6E:BE:E9"))
+    assert p._tracker_seen_ts == T0
+
+
+def test_a_neighbours_tracker_does_not_count(p):
+    p._record(*_advert("URBANARROW", "11:22:33:44:55:66"))
+    assert p._tracker_seen_ts == 0.0

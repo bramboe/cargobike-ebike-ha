@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.63.0"
+version: "2.64.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
@@ -30,7 +30,7 @@ options:
   motion_off_delay: 12
   tracker_always_on: false
   presence_alarm: true
-  presence_alarm_minutes: 5
+  presence_alarm_seconds: 30
   ble_proxy_host: ""
   ble_proxy_port: 6053
   ble_proxy_key: ""
@@ -61,8 +61,8 @@ schema:
   # Passive anti-theft: when armed, trip the alarm if the tracker advertisement
   # disappears (bike taken out of BLE range). Connection-free = no module drain.
   presence_alarm: bool?
-  # Minutes the tracker may go unheard while armed before the alarm trips.
-  presence_alarm_minutes: int(1,60)?
+  # Seconds the tracker may go unheard while armed before the alarm trips.
+  presence_alarm_seconds: int(15,3600)?
   # Optional remote ESPHome Bluetooth proxy for the presence layer (extra listening
   # spot). Host = IP or .local name; key = the ESPHome device's API encryption key.
   ble_proxy_host: str?
