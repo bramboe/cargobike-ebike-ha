@@ -77,7 +77,6 @@ SCAN_GAP = float(os.getenv("SCAN_GAP", "3"))
 COMODULE_ADDRESS = os.getenv("COMODULE_ADDRESS", "").strip()
 COMODULE_NAME = "urbanarrow"
 CHAR_155E = "0000155e-1212-efde-1523-785feabcd123"
-FRAME_MOTION = 0xD1  # 155e frame type that floods while the bike is moved
 MOTION_OFF_DELAY = float(os.getenv("MOTION_OFF_DELAY", "12"))
 # Passive presence: a connection-free anti-theft layer. We just listen (scan) for
 # the tracker's advertisement — zero extra module-battery drain, works even while
@@ -171,7 +170,7 @@ def _save_cfg() -> None:
 # Persist the last shown readings to disk so the panel shows them INSTANTLY on the
 # next start, instead of flashing dashes until the retained MQTT values arrive (or
 # staying empty forever if the broker lost its retained messages). Only stable,
-# display-relevant fields — NOT live flags (tracker_connected/motion/bonded), which
+# display-relevant fields — NOT live flags (motion/bonded), which
 # must reset to off on restart rather than wrongly read "connected".
 LAST_FILE = "/data/last.json"
 _PERSIST_KEYS = (
@@ -371,16 +370,6 @@ def _bosch_match(ble_serial):
 
 # Alarm (HomeKit Security System) is optional on top of the motion sensor.
 _alarm_off: bool = bool(_cfg0.get("alarm_off", False))
-# Battery-friendly: only hold the tracker connection while the alarm is armed
-# (it has its own battery; a permanent connection drains it). Set true to keep
-# it connected always (live motion even when disarmed).
-_tracker_always: bool = os.getenv("TRACKER_ALWAYS", "0") == "1"
-
-# DEVELOPER PROBE (probe_frames): log the full hex of every COMODULE 155e status
-# frame whenever its content changes (excluding the high-rate motion/sensor
-# frames), to find which byte flips when the bike's MAIN battery is pulled/inserted
-# while the module stays powered. Keeps the tracker connected without arming.
-_probe_frames: bool = os.getenv("PROBE_FRAMES", "0") == "1"
 # Passive presence alarm: when armed and the tracker advertisement disappears (bike
 # taken out of BLE range), trip the alarm. The presence binary_sensor is always
 # published; this flag only gates whether losing presence TRIPS the alarm.
@@ -389,8 +378,9 @@ _presence_alarm: bool = os.getenv("PRESENCE_ALARM", "1") == "1"
 # ----------------------------------------------------------- sensor registry
 # Alarmo-style unified sensor model. Every alarm/motion trigger source is a row
 # here with the same per-sensor options, individually enable/disable-able:
-#   - two BUILT-IN bike sensors: "tracker_motion" (BLE motion frames) and
-#     "presence" (tracker advertisement disappears = out of range);
+#   - the BUILT-IN "presence" sensor (tracker advertisement disappears = out of
+#     range). There is no BLE motion sensor: seeing motion over BLE needs a held
+#     connection, which drains the module battery (removed in v2.67.0);
 #   - any number of EXTERNAL HA binary_sensors the user mounts on the bike.
 # apply_sensor() below is the single decision point all three loops call.
 # Persisted in /data/ua.json under "sensors". Options per row:
@@ -416,13 +406,13 @@ def _migrate_sensors(cfg: dict) -> dict:
     first time so existing users keep identical behaviour."""
     s = cfg.get("sensors")
     if isinstance(s, dict) and "builtin" in s:
+        s["builtin"].pop("tracker_motion", None)    # pre-2.67 BLE motion row
         return s
     ext = []
     if _ext_motion:
         ext.append(_sensor_row(id="ext1", entity_id=_ext_motion, name=_ext_motion))
     return {
         "builtin": {
-            "tracker_motion": _sensor_row(enabled=not _tracker_off),
             "presence": _sensor_row(enabled=_presence_alarm),
         },
         "external": ext,
@@ -444,8 +434,6 @@ _armed_at: float = 0.0
 _pending_since: float = 0.0
 _pending_reason: str = ""
 
-_PROBE_SKIP = (0xD1, 0xC8)   # frame types that flood continuously — never probed
-_probe_last: dict[int, bytes] = {}
 # DEVELOPER MOTION TEST (motion_test): one connection-free look at every passive
 # channel that might reveal movement — the tracker advert (payload, rate,
 # scan-response), the Bosch hub waking up, and the PON cloud state — so a
@@ -453,6 +441,10 @@ _probe_last: dict[int, bytes] = {}
 # BLE adapter while on (bike reads and presence pause).
 _motion_test: bool = os.getenv("MOTION_TEST", "0") == "1"
 MOTION_TEST_POLL = 30.0   # PON poll interval (s) while the test runs
+# While armed, poll PON this often: the GPS module reports to the cloud on its own
+# when it is moved (seen in the 2026-09-27 motion tests: within ~30 s), so every
+# fresh report is logged ("PON module report") to learn its routine pattern.
+PON_POLL_ARMED = float(os.getenv("PON_POLL_ARMED", "30") or 30)
 # Optional remote ESPHome Bluetooth proxy for the presence layer: lets HA hear the
 # tracker from a second spot (e.g. the shed) so "in range" is more robust and the
 # bike has to leave EVERY listener's range before the leave-range alarm fires.
@@ -814,27 +806,21 @@ async def _alarm_restore() -> None:
     publish_alarm(str(_alarm["state"]))
 
 
-def _want_tracker() -> bool:
-    """Whether to hold the tracker connection now. Battery-friendly: only while
-    armed, unless tracker_always is set (and never if the tracker is disabled)."""
-    if _tracker_off:
-        return False
-    if _tracker_always or _probe_frames:
-        return True
-    # The BLE connection (which drains the module battery) is only worth holding
-    # for the tracker-motion sensor; if the user disabled it, don't connect.
-    if not _sensors["builtin"]["tracker_motion"].get("enabled", True):
-        return False
-    return not _alarm_off and _alarm["state"] in (ARMED_STATES + ("triggered",))
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("bosch-reader")
 
 
 def _note_armed() -> None:
-    """Record the moment we (re)armed, for the global exit delay."""
+    """Record the moment we (re)armed, for the global exit delay, and wake the
+    cloud poll so it switches to the armed cadence now (it may be sleeping for
+    up to PON_POLL_HOME). Called from the MQTT thread too, hence threadsafe."""
     global _armed_at
     _armed_at = time.time()
+    if _loop is not None:
+        try:
+            _loop.call_soon_threadsafe(_cloud_wake)
+        except RuntimeError:                         # loop already closed
+            pass
 
 
 def _publish_alarm_reason(reason: str) -> None:
@@ -2081,100 +2067,6 @@ async def find_comodule(timeout: float = 12.0):
     return found.get("device")
 
 
-async def motion_watcher() -> None:
-    """Keep a connection to the tracker and watch 155e for motion.
-
-    The tracker streams 0xD1 frames in a burst while the bike is physically moved
-    (even with the eBike off). Publish motion ON on the first 0xD1 and OFF after
-    MOTION_OFF_DELAY seconds of stillness. Re-resolves the tracker each reconnect
-    so a change made in the setup UI takes effect, and honours the disabled flag.
-    """
-    state = {"on": False, "last": 0.0, "since": 0.0}
-
-    def cb(_c, data: bytearray) -> None:
-        b = bytes(data)
-        if _probe_frames and len(b) >= 2 and b[1] not in _PROBE_SKIP:
-            if _probe_last.get(b[1]) != b:   # log each distinct status frame once
-                _probe_last[b[1]] = b
-                log.info("PROBE 155e frame %02X (%dB): %s", b[1], len(b), b.hex())
-        if len(b) > 2 and b[1] == 0xC6:        # COMODULE status: byte2 = its own battery %
-            bat = b[2]
-            if 0 <= bat <= 100:
-                _last["tracker_updated"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                _record_charge(bat)
-                if _last.get("tracker_battery") != bat:
-                    _last["tracker_battery"] = bat
-                    if _mqtt is not None:
-                        _mqtt.publish(TRACKER_TOPIC, json.dumps(
-                            {"battery": bat, "ts": _last["tracker_updated"]}), retain=True)
-        if len(b) > 1 and b[1] == FRAME_MOTION:
-            now = time.time()
-            state["last"] = now
-            if not state["on"]:
-                state["on"] = True
-                state["since"] = now
-                _motion_src["tracker_motion"] = True
-                _publish_motion_or()
-                log.info("motion: ON")
-
-    while True:
-        if not _want_tracker():
-            # Disarmed (or disabled): let the tracker sleep to save its battery.
-            if state["on"]:
-                state["on"] = False
-                _motion_src["tracker_motion"] = False
-                _publish_motion_or()
-            _last["tracker_connected"] = False
-            await asyncio.sleep(4)
-            continue
-        try:
-            # Inside the try: a scan error (BlueZ busy/restarting) must end in a
-            # retry, not in a dead watcher while the alarm is armed.
-            target = await find_comodule()
-            if target is None:
-                await asyncio.sleep(8)
-                continue
-            async with BleakClient(target, timeout=20.0) as client:
-                await client.start_notify(CHAR_155E, cb)
-                log.info("COMODULE motion watcher connected (%s)", target.address)
-                _last["tracker_connected"] = True
-                await _read_module_dis(client)  # static module specs, read once
-                while client.is_connected and _want_tracker():
-                    await asyncio.sleep(1)
-                    now = time.time()
-                    tb = _last.get("tracker_battery")
-                    if (isinstance(tb, int) and tb <= 20
-                            and _alarm["state"] in ARMED_STATES):
-                        # Tracker's own battery is low — turn the alarm off so it
-                        # can sleep/charge (a notification is sent by HA).
-                        _alarm["state"] = "disarmed"
-                        _alarm["fired"] = False
-                        publish_alarm("disarmed")
-                        publish_status(f"Tracker low ({tb}%) — charge it; alarm off", "ON")
-                        log.info("tracker low (%s%%) — alarm auto-disabled", tb)
-                        break
-                    if state["on"] and now - state["last"] > MOTION_OFF_DELAY:
-                        state["on"] = False
-                        _motion_src["tracker_motion"] = False
-                        _publish_motion_or()
-                        _alarm["fired"] = False  # let the next movement trigger again
-                        log.info("motion: OFF")
-                    # Alarm decision via the unified sensor model. The 3s sustained
-                    # gate keeps a single stray frame from tripping it; motion frames
-                    # are noisy. feed_motion=False — motion is published above.
-                    if state["on"] and now - state["since"] >= 3:
-                        apply_sensor(True, _sensors["builtin"]["tracker_motion"],
-                                     src_key="tracker_motion", feed_motion=False)
-        except Exception as err:  # noqa: BLE001
-            log.warning("motion watcher: %s: %s", type(err).__name__, err)
-        _last["tracker_connected"] = False
-        if state["on"]:
-            state["on"] = False
-            publish_motion(False)
-            _last["motion"] = False
-        await asyncio.sleep(5)  # brief backoff before reconnecting
-
-
 async def _read_module_dis(client) -> None:
     """Read the COMODULE's Device Information once -> _last module_* fields."""
     mapping = {"module_firmware": "firmware", "module_manufacturer": "manufacturer",
@@ -2197,13 +2089,12 @@ async def _read_module_dis(client) -> None:
 
 async def read_tracker_battery(proactive: bool = True) -> None:
     """One-shot, low-power refresh of the tracker's own battery %. Used while the
-    bike is on (its main battery present, so the module is charging) and the alarm
-    isn't already holding the connection. Briefly connects, grabs a 0xC6 status
+    bike is on (its main battery present, so the module is charging). Briefly connects, grabs a 0xC6 status
     frame, then disconnects so the tracker can sleep again. Proactive reads are
     skipped when the main battery is inferred OUT (module on its own battery), to
     spare it — manual refreshes (proactive=False) always run."""
-    if _tracker_off or _want_tracker():
-        return  # disabled, or the motion watcher already keeps it fresh
+    if _tracker_off:
+        return  # tracker disabled
     if proactive and _main_battery_state == "out":
         return  # module on its own battery — don't spend a connection on a read
     if _tracker_read_lock.locked():
@@ -2396,11 +2287,9 @@ async def presence_loop() -> None:
                 log.info("presence scan: %s", mode)
                 _pres["mode"] = mode
                 _pres["guard_since"] = time.time() if mode == "guard" else 0.0
-            # Seen by any source? Held connection or a scan hit (_record stamps
-            # _tracker_seen_ts for every scan); the remote BLE proxy does too.
-            if _last.get("tracker_connected"):
-                _tracker_seen_ts = time.time()
-            elif mode != "paused" and await scan_tracker_present(
+            # Seen by any source? A scan hit (_record stamps _tracker_seen_ts for
+            # every scan); the remote BLE proxy does too.
+            if mode != "paused" and await scan_tracker_present(
                     PRESENCE_SCAN_ARMED if mode == "guard" else 8.0):
                 _tracker_seen_ts = time.time()
             now = time.time()
@@ -2777,8 +2666,8 @@ async def pon_cloud_loop() -> None:
                              lk[0] if lk else None)
             elif isinstance(lk, dict):
                 entry = lk
-            if entry and _motion_test:
-                _motion_test_cloud(entry)
+            if entry:
+                _log_module_report(entry)
             if entry:
                 if entry.get("lastOnline"):
                     payload["last_online"] = entry["lastOnline"]
@@ -2846,6 +2735,7 @@ async def pon_cloud_loop() -> None:
         try:
             await asyncio.wait_for(_cloud_wake_evt.wait(),
                                    timeout=(MOTION_TEST_POLL if _motion_test
+                                            else PON_POLL_ARMED if _presence_guarding()
                                             else PON_POLL_HOME if slow else PON_POLL))
         except asyncio.TimeoutError:
             pass
@@ -3114,9 +3004,9 @@ async def bosch_cloud_loop() -> None:
 
 
 async def start_motion(_mqtt_client: mqtt.Client) -> None:
-    """Launch the self-resolving motion watcher (no-op work if disabled)."""
+    """Launch the connection-free guard loops. Motion now only comes from
+    external HA sensors (BLE motion needed a module-draining connection)."""
     publish_motion(False)
-    _supervise("motion_watcher", motion_watcher)
     # No publish_present(False) here: presence_loop restores the last known state
     # and only reports "out of range" after a real grace period of silence.
     _supervise("presence_loop", presence_loop)
@@ -3131,7 +3021,7 @@ async def motion_test_loop() -> None:
       tracker — our module's full advertisement (active scan, so the scan-response
                 too) whenever any field changes, plus rate and RSSI per 10 s;
       hub     — the Bosch hub's advert appearing / disappearing (wake-on-motion);
-      cloud   — changed fields of PON's last-known state (see _motion_test_cloud).
+      cloud   — changed fields of PON's last-known state (_log_module_report).
     Rest, move, rest, and compare the log lines per phase."""
     WINDOW = 10.0
     HUB_GONE_AFTER = 15.0
@@ -3203,7 +3093,7 @@ async def motion_test_loop() -> None:
             await asyncio.sleep(2)
 
 
-_mt_cloud_prev: dict = {}
+_module_prev: dict = {}
 
 
 def _flatten(obj, prefix: str = "") -> dict:
@@ -3220,21 +3110,24 @@ def _flatten(obj, prefix: str = "") -> dict:
     return out
 
 
-def _motion_test_cloud(entry: dict) -> None:
-    """DEV (motion_test): log which fields of PON's last-known state changed since
-    the previous poll — does the module report movement on its own?"""
+def _log_module_report(entry: dict) -> None:
+    """Log which fields of PON's last-known state changed since the previous poll.
+    The module reports on its own when moved (and routinely); these lines are the
+    data for telling the two apart before this becomes an alarm source."""
     flat = _flatten(entry)
-    changed = {k: v for k, v in flat.items() if _mt_cloud_prev.get(k) != v}
-    gone = sorted(k for k in _mt_cloud_prev if k not in flat)
-    if not _mt_cloud_prev:
-        log.info("MOTION TEST cloud: baseline %s", json.dumps(flat, default=str))
+    changed = {k: v for k, v in flat.items() if _module_prev.get(k) != v}
+    gone = sorted(k for k in _module_prev if k not in flat)
+    armed = "armed" if _presence_guarding() else "disarmed"
+    if not _module_prev:
+        log.info("PON module report: baseline (%s) %s", armed,
+                 json.dumps(flat, default=str))
     elif changed or gone:
-        log.info("MOTION TEST cloud: changed %s%s", json.dumps(changed, default=str),
-                 f" gone {gone}" if gone else "")
-    else:
-        log.info("MOTION TEST cloud: unchanged")
-    _mt_cloud_prev.clear()
-    _mt_cloud_prev.update(flat)
+        log.info("PON module report: changed (%s) %s%s", armed,
+                 json.dumps(changed, default=str), f" gone {gone}" if gone else "")
+    elif _motion_test:
+        log.info("PON module report: unchanged")
+    _module_prev.clear()
+    _module_prev.update(flat)
 
 
 # ------------------------------------------------------------- setup UI (Ingress)
@@ -3463,8 +3356,8 @@ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const api=async(p,o)=>(await fetch(p,o)).json();
 const post=(p,b)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 const LANG=(navigator.language||'en').toLowerCase().startsWith('nl')?'nl':'en';
-const T={nl:{tab_dash:'Dashboard',tab_more:'Meer info',tab_set:'Instellingen',components:'Componenten',about:'Over deze add-on',about_p:'Leest je Bosch Smart System eBike (Kiox) via Bluetooth uit en publiceert batterij, bereik, modus, km-stand, beurt, beweging/alarm en tracker naar Home Assistant.',about_repo:'Broncode op GitHub',c_drive:'Aandrijving',c_batt:'Accu',c_disp:'Display',c_hub:'Hub',mode:'Rijmodus',maint:'Onderhoud',maint_sub:'tot de volgende servicebeurt',security:'Beveiliging',ranges:'Geschat bereik per stand',mileage:'Kilometerstand',tech:'Technische info',tech_kiox:'Kiox (Bosch-hub)',tech_gps:'GPS-module',t_model:'Model',t_frame:'Framenummer',devmode:'🛠️ Ontwikkelmodus: COMODULE-probe staat AAN — logt 155e-statusframes en houdt de tracker verbonden (de module-accu loopt sneller leeg). Alleen voor ontwikkeling; zet COMODULE-probe (dev) uit in de configuratie als je klaar bent.',gps:'GPS-module & locatie',gps_conn:'verbonden',in_range:'in bereik',out_range:'buiten bereik',ob_title:'Voeg je fiets toe',ob_body:"Zet het display van de fiets aan (en in koppelmodus) — dan verschijnt 'ie hieronder.",ob_scan:'Zoek fiets',add_bike:'Toevoegen',adding:'Toevoegen…',replace_bike:'Andere fiets koppelen',ob_btn:'Naar Instellingen',remove_bike:'Verwijder fiets',remove_confirm_btn:'Bevestig verwijderen',remove_confirm:'⚠️ Weet je het zeker? Klik nogmaals om te wissen.',removed_ok:'Verwijderd ✓',lk_on:'🔒 Vergrendeld',lk_off:'🔓 Ontgrendeld',refresh_module:'Module-accu verversen',refreshing:'verversen…',t_pname:'Productnaam',t_color:'Kleur',t_part:'Onderdeelnummer',t_sku:'Artikelcode',t_pcode:'Productcode',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth-adres',t_mac:'MAC-adres',t_mfr:'Fabrikant',t_hw:'Hardware',t_batt:'Module-accu',t_gps:'GPS-coördinaten',legal:'Onofficiële, door de community gemaakte integratie. Niet gelieerd aan, goedgekeurd of ondersteund door Bosch eBike Systems of Urban Arrow. Gebruik volledig op eigen risico, zonder enige garantie. Alle merknamen zijn eigendom van hun respectievelijke eigenaren.',su_bike_h:'1. Fiets',su_bike_p:"Zet het display van de fiets aan en zoek 'm.",scan_bikes:'Scan fietsen',select_bike:'Selecteer deze fiets',su_pair_p:'Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:',pair_btn:'Koppel (pair)',su_tracker_h:'2. GPS-tracker (anti-diefstal, optioneel)',su_tracker_p:"De tracker is altijd aan. Scan en kies 'm, of sla over.",scan_trackers:'Scan trackers',skip:'Overslaan / uit',select_tracker:'Selecteer deze tracker',su_alarm_h:'3. Alarm (optioneel — vereist de tracker)',su_alarm_p:'Afwezig = hard (push + lampen), Thuis = stil (alleen melding). Uit = alleen de bewegingssensor.',conn_on:'Verbonden',conn_off:'Niet verbonden',no_reading:'nog geen meting',up_now:'zojuist bijgewerkt',up_min:'bijgewerkt {n} min geleden',up_hour:'bijgewerkt {n} uur geleden',up_day:'bijgewerkt {n} d geleden',motion_y:'beweging',motion_n:'rustig',alarm_off:'Alarm uit',s_disarmed:'Uit',s_home:'Stil',s_away:'Vol alarm',s_trig:'⚠️ GEACTIVEERD',a_off:'Uit',a_home:'Stil',a_away:'Vol alarm',alarm_off_hint:'Alarm staat uit (zie Instellingen)',alarm_enable:'Alarm inschakelen',alarm_disable:'Alarm uitschakelen',now_off:'momenteel uit',now_on:'momenteel aan',scanning:'scannen… (±8s)',nothing:'niets gevonden — staat het apparaat aan/in bereik?',pairing:'koppelen…',paired_ok:'Gekoppeld ✓',paired_fail:'Mislukt — staat de fiets in pairing mode?',request_photo:'Andere fiets? Vraag je kleur/model aan',sec_passive:'🛡️ Passieve bewaking: de add-on luistert alleen naar de GPS-module (geen verbinding, geen extra accuverbruik). Staat het alarm scherp, dan luistert hij vrijwel continu en gaat het alarm af zodra de module {n} s niet meer gehoord wordt. Zegt de GPS dat de fiets weg is, dan pauzeert het luisteren tot hij weer thuis is.',sec_warn:'⚠️ Let op: scherp zetten houdt de tracker verbonden — daardoor loopt de module-accu sneller leeg. Bij ≤20% schakelt het alarm automatisch uit.',ext_h:'Externe bewegingssensor (op de fiets)',ext_p:'Kies een eigen Home Assistant-sensor (contact-, trillings- of bewegingssensor) die je op de fiets monteert. Gaat die aan, dan telt dat als beweging en gaat — als het alarm scherp staat — het alarm af. Werkt los van Bluetooth.',ext_save:'Opslaan',ext_none:'— Geen —',saved_ok:'Opgeslagen ✓',sens_h:'Sensoren',sens_p:'Elke bron die beweging of diefstal kan melden — de ingebouwde fietssensoren én je eigen HA-sensoren — staat hier als een rij die je apart aan/uit zet, met dezelfde opties.',sens_add:'+ Sensor toevoegen',sens_pick:'Kies een sensor…',s_tracker:'Tracker-beweging (Bluetooth)',s_presence:'Nabijheid tracker (buiten bereik)',s_ext:'Externe sensor',o_role:'Rol:',role_alarm:'Alarm',role_motion:'Alleen beweging',o_alwayson:'Altijd aan (ook als alarm uit)',o_unavail:'Onbereikbaar = sabotage',o_invert:'Omkeren',o_dbl:'Dubbele controle',m_silent:'Stil',m_loud:'Vol alarm',entry_delay:'Ingangsvertraging',exit_delay:'Uitgangsvertraging',sens_delay_hint:'Uitgang = tijd na scherpzetten voordat sensoren tellen (wegrijden). Ingang = genadetijd voordat het alarm echt afgaat.',dbl_win:'Venster dubbele controle',dbl_hint:'Sensoren met “Dubbele controle” laten het alarm pas afgaan als er minstens twee binnen dit venster samen bevestigen.',st_unavail:'onbereikbaar',cloud:'Cloud (PON)',cloud_charge:'Module-lading (cloud)',cloud_loc:'Locatie',cl_moving:'Rijdt',cl_parked:'Geparkeerd',cloud_home:'Afstand tot huis',at_home:'Thuis',away:'Onderweg',mb_in:'Hoofdaccu erin (module laadt)',mb_out:'Hoofdaccu eruit (module op eigen accu)',bosch_h:'Accu & service',b_soh:'Gezondheid',b_cycles:'Laadcycli',b_energy:'Geleverd',b_motor:'Motor-uren',b_service:'Volgende beurt',b_sw:'Software',cloud_accounts:'Cloud-accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (locatie/GPS)',acc_bosch:'Bosch (diagnostiek)',acc_linked:'gekoppeld ✓',acc_off:'niet ingesteld',acc_hint:'Live data komt via Bluetooth (scan hieronder). Diagnostiek en locatie komen via je Bosch/PON-account (add-on-instellingen) — die fiets wordt automatisch gekoppeld, zonder scan.',your_bike:'jouw geregistreerde fiets',registered:'geregistreerd',acc_checking:'controleren…',activities:'Activiteiten',act_ride_start:'Rit gestart',act_ride_stop:'Rit gestopt',act_left_home:'Vertrokken van huis',act_arrived_home:'Thuisgekomen',act_moved:'Verplaatst',act_none:'nog geen activiteit geregistreerd',ranges_short:'bereik',same_dist:'zelfde afstand als je fiets — waarschijnlijk van jou'},
-en:{tab_dash:'Dashboard',tab_more:'More info',tab_set:'Settings',components:'Components',about:'About this add-on',about_p:'Reads your Bosch Smart System eBike (Kiox) over Bluetooth and publishes battery, range, mode, odometer, service, motion/alarm and tracker to Home Assistant.',about_repo:'Source code on GitHub',c_drive:'Drive unit',c_batt:'Battery',c_disp:'Display',c_hub:'Hub',mode:'Ride mode',maint:'Maintenance',maint_sub:'until the next service',security:'Security',ranges:'Estimated range per mode',mileage:'Odometer',tech:'Technical info',tech_kiox:'Kiox (Bosch hub)',tech_gps:'GPS module',t_model:'Model',t_frame:'Frame number',devmode:'🛠️ Developer mode: the COMODULE probe is ON — it logs 155e status frames and keeps the tracker connected (drains the module battery faster). For development only; turn off COMODULE probe (dev) in the configuration when done.',gps:'GPS module & location',gps_conn:'connected',in_range:'in range',out_range:'out of range',ob_title:'Add your bike',ob_body:"Turn on the bike's display (and put it in pairing mode) — it'll appear below.",ob_scan:'Find bike',add_bike:'Add',adding:'Adding…',replace_bike:'Link a different bike',ob_btn:'Go to Settings',remove_bike:'Remove bike',remove_confirm_btn:'Confirm remove',remove_confirm:'⚠️ Are you sure? Click again to wipe.',removed_ok:'Removed ✓',lk_on:'🔒 Locked',lk_off:'🔓 Unlocked',refresh_module:'Refresh module battery',refreshing:'refreshing…',t_pname:'Product name',t_color:'Colour',t_part:'Part number',t_sku:'Article code',t_pcode:'Product code',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth address',t_mac:'MAC address',t_mfr:'Manufacturer',t_hw:'Hardware',t_batt:'Module battery',t_gps:'GPS coordinates',legal:'Unofficial, community-made integration. Not affiliated with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow. Use entirely at your own risk, without any warranty. All trademarks are the property of their respective owners.',su_bike_h:'1. Bike',su_bike_p:"Turn on the bike's display and find it.",scan_bikes:'Scan bikes',select_bike:'Select this bike',su_pair_p:'Put the bike in pairing mode (display → connect a new device), then:',pair_btn:'Pair',su_tracker_h:'2. GPS tracker (anti-theft, optional)',su_tracker_p:'The tracker is always on. Scan and pick it, or skip.',scan_trackers:'Scan trackers',skip:'Skip / off',select_tracker:'Select this tracker',su_alarm_h:'3. Alarm (optional — needs the tracker)',su_alarm_p:'Away = loud (push + lights), Home = silent (notification only). Off = motion sensor only.',conn_on:'Connected',conn_off:'Not connected',no_reading:'no reading yet',up_now:'updated just now',up_min:'updated {n} min ago',up_hour:'updated {n} h ago',up_day:'updated {n} d ago',motion_y:'motion',motion_n:'still',alarm_off:'Alarm off',s_disarmed:'Off',s_home:'Silent',s_away:'Full alarm',s_trig:'⚠️ TRIGGERED',a_off:'Off',a_home:'Silent',a_away:'Full alarm',alarm_off_hint:'Alarm is off (see Settings)',alarm_enable:'Enable alarm',alarm_disable:'Disable alarm',now_off:'currently off',now_on:'currently on',scanning:'scanning… (±8s)',nothing:'nothing found — is the device on / in range?',pairing:'pairing…',paired_ok:'Paired ✓',paired_fail:'Failed — is the bike in pairing mode?',request_photo:'Different bike? Request your colour & model',sec_passive:'🛡️ Passive guard: the add-on only listens for the GPS module (no connection, no extra battery drain). While armed it listens almost continuously and the alarm goes off once the module hasn\\'t been heard for {n} s. When GPS says the bike is away, listening pauses until it is home again.',sec_warn:'⚠️ Note: arming keeps the tracker connected — this drains the module battery faster. At ≤20% the alarm switches off automatically.',ext_h:'External motion sensor (on the bike)',ext_p:'Pick your own Home Assistant sensor (contact, vibration or motion) that you mount on the bike. When it turns on it counts as motion and — if the alarm is armed — triggers it. Works independently of Bluetooth.',ext_save:'Save',ext_none:'— None —',saved_ok:'Saved ✓',sens_h:'Sensors',sens_p:'Every source that can report movement or theft — the built-in bike sensors and your own HA sensors — is a row here you enable/disable individually, with the same options.',sens_add:'+ Add sensor',sens_pick:'Pick a sensor…',s_tracker:'Tracker motion (Bluetooth)',s_presence:'Tracker presence (out of range)',s_ext:'External sensor',o_role:'Role:',role_alarm:'Alarm',role_motion:'Motion only',o_alwayson:'Always on (even when disarmed)',o_unavail:'Unavailable = tamper',o_invert:'Invert',o_dbl:'Double-check',m_silent:'Silent',m_loud:'Full alarm',entry_delay:'Entry delay',exit_delay:'Exit delay',sens_delay_hint:'Exit = grace after arming before sensors count (riding away). Entry = grace before the alarm actually fires.',dbl_win:'Double-check window',dbl_hint:'Sensors marked “Double-check” only trip the alarm once at least two confirm together within this window.',st_unavail:'unavailable',cloud:'Cloud (PON)',cloud_charge:'Module charge (cloud)',cloud_loc:'Location',cl_moving:'Moving',cl_parked:'Parked',cloud_home:'Distance from home',at_home:'Home',away:'Away',mb_in:'Main battery in (module charging)',mb_out:'Main battery out (module on its own)',bosch_h:'Battery & service',b_soh:'Health',b_cycles:'Charge cycles',b_energy:'Delivered',b_motor:'Motor hours',b_service:'Next service',b_sw:'Software',cloud_accounts:'Cloud accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (location/GPS)',acc_bosch:'Bosch (diagnostics)',acc_linked:'linked ✓',acc_off:'not set',acc_hint:'Live data comes over Bluetooth (scan below). Diagnostics and location come from your Bosch/PON account (add-on Settings) — that bike is linked automatically, without a scan.',your_bike:'your registered bike',registered:'registered',acc_checking:'checking…',activities:'Activity',act_ride_start:'Ride started',act_ride_stop:'Ride stopped',act_left_home:'Left home',act_arrived_home:'Arrived home',act_moved:'Moved',act_none:'no activity recorded yet',ranges_short:'range',same_dist:'same distance as your bike — likely yours'}};
+const T={nl:{tab_dash:'Dashboard',tab_more:'Meer info',tab_set:'Instellingen',components:'Componenten',about:'Over deze add-on',about_p:'Leest je Bosch Smart System eBike (Kiox) via Bluetooth uit en publiceert batterij, bereik, modus, km-stand, beurt, beweging/alarm en tracker naar Home Assistant.',about_repo:'Broncode op GitHub',c_drive:'Aandrijving',c_batt:'Accu',c_disp:'Display',c_hub:'Hub',mode:'Rijmodus',maint:'Onderhoud',maint_sub:'tot de volgende servicebeurt',security:'Beveiliging',ranges:'Geschat bereik per stand',mileage:'Kilometerstand',tech:'Technische info',tech_kiox:'Kiox (Bosch-hub)',tech_gps:'GPS-module',t_model:'Model',t_frame:'Framenummer',devmode:'🛠️ Beweegtest staat AAN — bewaking en uitlezen pauzeren. Zet Beweegtest (ontwikkelaar) uit in de configuratie als je klaar bent.',gps:'GPS-module & locatie',gps_conn:'verbonden',in_range:'in bereik',out_range:'buiten bereik',ob_title:'Voeg je fiets toe',ob_body:"Zet het display van de fiets aan (en in koppelmodus) — dan verschijnt 'ie hieronder.",ob_scan:'Zoek fiets',add_bike:'Toevoegen',adding:'Toevoegen…',replace_bike:'Andere fiets koppelen',ob_btn:'Naar Instellingen',remove_bike:'Verwijder fiets',remove_confirm_btn:'Bevestig verwijderen',remove_confirm:'⚠️ Weet je het zeker? Klik nogmaals om te wissen.',removed_ok:'Verwijderd ✓',lk_on:'🔒 Vergrendeld',lk_off:'🔓 Ontgrendeld',refresh_module:'Module-accu verversen',refreshing:'verversen…',t_pname:'Productnaam',t_color:'Kleur',t_part:'Onderdeelnummer',t_sku:'Artikelcode',t_pcode:'Productcode',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth-adres',t_mac:'MAC-adres',t_mfr:'Fabrikant',t_hw:'Hardware',t_batt:'Module-accu',t_gps:'GPS-coördinaten',legal:'Onofficiële, door de community gemaakte integratie. Niet gelieerd aan, goedgekeurd of ondersteund door Bosch eBike Systems of Urban Arrow. Gebruik volledig op eigen risico, zonder enige garantie. Alle merknamen zijn eigendom van hun respectievelijke eigenaren.',su_bike_h:'1. Fiets',su_bike_p:"Zet het display van de fiets aan en zoek 'm.",scan_bikes:'Scan fietsen',select_bike:'Selecteer deze fiets',su_pair_p:'Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:',pair_btn:'Koppel (pair)',su_tracker_h:'2. GPS-tracker (anti-diefstal, optioneel)',su_tracker_p:"De tracker is altijd aan. Scan en kies 'm, of sla over.",scan_trackers:'Scan trackers',skip:'Overslaan / uit',select_tracker:'Selecteer deze tracker',su_alarm_h:'3. Alarm (optioneel — vereist de tracker)',su_alarm_p:'Afwezig = hard (push + lampen), Thuis = stil (alleen melding). Uit = alleen de bewegingssensor.',conn_on:'Verbonden',conn_off:'Niet verbonden',no_reading:'nog geen meting',up_now:'zojuist bijgewerkt',up_min:'bijgewerkt {n} min geleden',up_hour:'bijgewerkt {n} uur geleden',up_day:'bijgewerkt {n} d geleden',motion_y:'beweging',motion_n:'rustig',alarm_off:'Alarm uit',s_disarmed:'Uit',s_home:'Stil',s_away:'Vol alarm',s_trig:'⚠️ GEACTIVEERD',a_off:'Uit',a_home:'Stil',a_away:'Vol alarm',alarm_off_hint:'Alarm staat uit (zie Instellingen)',alarm_enable:'Alarm inschakelen',alarm_disable:'Alarm uitschakelen',now_off:'momenteel uit',now_on:'momenteel aan',scanning:'scannen… (±8s)',nothing:'niets gevonden — staat het apparaat aan/in bereik?',pairing:'koppelen…',paired_ok:'Gekoppeld ✓',paired_fail:'Mislukt — staat de fiets in pairing mode?',request_photo:'Andere fiets? Vraag je kleur/model aan',sec_passive:'🛡️ Passieve bewaking: de add-on luistert alleen naar de GPS-module (geen verbinding, geen extra accuverbruik). Staat het alarm scherp, dan luistert hij vrijwel continu en gaat het alarm af zodra de module {n} s niet meer gehoord wordt. Zegt de GPS dat de fiets weg is, dan pauzeert het luisteren tot hij weer thuis is.',ext_h:'Externe bewegingssensor (op de fiets)',ext_p:'Kies een eigen Home Assistant-sensor (contact-, trillings- of bewegingssensor) die je op de fiets monteert. Gaat die aan, dan telt dat als beweging en gaat — als het alarm scherp staat — het alarm af. Werkt los van Bluetooth.',ext_save:'Opslaan',ext_none:'— Geen —',saved_ok:'Opgeslagen ✓',sens_h:'Sensoren',sens_p:'Elke bron die beweging of diefstal kan melden — de ingebouwde fietssensoren én je eigen HA-sensoren — staat hier als een rij die je apart aan/uit zet, met dezelfde opties.',sens_add:'+ Sensor toevoegen',sens_pick:'Kies een sensor…',s_presence:'Nabijheid tracker (buiten bereik)',s_ext:'Externe sensor',o_role:'Rol:',role_alarm:'Alarm',role_motion:'Alleen beweging',o_alwayson:'Altijd aan (ook als alarm uit)',o_unavail:'Onbereikbaar = sabotage',o_invert:'Omkeren',o_dbl:'Dubbele controle',m_silent:'Stil',m_loud:'Vol alarm',entry_delay:'Ingangsvertraging',exit_delay:'Uitgangsvertraging',sens_delay_hint:'Uitgang = tijd na scherpzetten voordat sensoren tellen (wegrijden). Ingang = genadetijd voordat het alarm echt afgaat.',dbl_win:'Venster dubbele controle',dbl_hint:'Sensoren met “Dubbele controle” laten het alarm pas afgaan als er minstens twee binnen dit venster samen bevestigen.',st_unavail:'onbereikbaar',cloud:'Cloud (PON)',cloud_charge:'Module-lading (cloud)',cloud_loc:'Locatie',cl_moving:'Rijdt',cl_parked:'Geparkeerd',cloud_home:'Afstand tot huis',at_home:'Thuis',away:'Onderweg',mb_in:'Hoofdaccu erin (module laadt)',mb_out:'Hoofdaccu eruit (module op eigen accu)',bosch_h:'Accu & service',b_soh:'Gezondheid',b_cycles:'Laadcycli',b_energy:'Geleverd',b_motor:'Motor-uren',b_service:'Volgende beurt',b_sw:'Software',cloud_accounts:'Cloud-accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (locatie/GPS)',acc_bosch:'Bosch (diagnostiek)',acc_linked:'gekoppeld ✓',acc_off:'niet ingesteld',acc_hint:'Live data komt via Bluetooth (scan hieronder). Diagnostiek en locatie komen via je Bosch/PON-account (add-on-instellingen) — die fiets wordt automatisch gekoppeld, zonder scan.',your_bike:'jouw geregistreerde fiets',registered:'geregistreerd',acc_checking:'controleren…',activities:'Activiteiten',act_ride_start:'Rit gestart',act_ride_stop:'Rit gestopt',act_left_home:'Vertrokken van huis',act_arrived_home:'Thuisgekomen',act_moved:'Verplaatst',act_none:'nog geen activiteit geregistreerd',ranges_short:'bereik',same_dist:'zelfde afstand als je fiets — waarschijnlijk van jou'},
+en:{tab_dash:'Dashboard',tab_more:'More info',tab_set:'Settings',components:'Components',about:'About this add-on',about_p:'Reads your Bosch Smart System eBike (Kiox) over Bluetooth and publishes battery, range, mode, odometer, service, motion/alarm and tracker to Home Assistant.',about_repo:'Source code on GitHub',c_drive:'Drive unit',c_batt:'Battery',c_disp:'Display',c_hub:'Hub',mode:'Ride mode',maint:'Maintenance',maint_sub:'until the next service',security:'Security',ranges:'Estimated range per mode',mileage:'Odometer',tech:'Technical info',tech_kiox:'Kiox (Bosch hub)',tech_gps:'GPS module',t_model:'Model',t_frame:'Frame number',devmode:'🛠️ Motion test is ON — guarding and reading are paused. Turn off Motion test (developer) in the configuration when done.',gps:'GPS module & location',gps_conn:'connected',in_range:'in range',out_range:'out of range',ob_title:'Add your bike',ob_body:"Turn on the bike's display (and put it in pairing mode) — it'll appear below.",ob_scan:'Find bike',add_bike:'Add',adding:'Adding…',replace_bike:'Link a different bike',ob_btn:'Go to Settings',remove_bike:'Remove bike',remove_confirm_btn:'Confirm remove',remove_confirm:'⚠️ Are you sure? Click again to wipe.',removed_ok:'Removed ✓',lk_on:'🔒 Locked',lk_off:'🔓 Unlocked',refresh_module:'Refresh module battery',refreshing:'refreshing…',t_pname:'Product name',t_color:'Colour',t_part:'Part number',t_sku:'Article code',t_pcode:'Product code',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth address',t_mac:'MAC address',t_mfr:'Manufacturer',t_hw:'Hardware',t_batt:'Module battery',t_gps:'GPS coordinates',legal:'Unofficial, community-made integration. Not affiliated with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow. Use entirely at your own risk, without any warranty. All trademarks are the property of their respective owners.',su_bike_h:'1. Bike',su_bike_p:"Turn on the bike's display and find it.",scan_bikes:'Scan bikes',select_bike:'Select this bike',su_pair_p:'Put the bike in pairing mode (display → connect a new device), then:',pair_btn:'Pair',su_tracker_h:'2. GPS tracker (anti-theft, optional)',su_tracker_p:'The tracker is always on. Scan and pick it, or skip.',scan_trackers:'Scan trackers',skip:'Skip / off',select_tracker:'Select this tracker',su_alarm_h:'3. Alarm (optional — needs the tracker)',su_alarm_p:'Away = loud (push + lights), Home = silent (notification only). Off = motion sensor only.',conn_on:'Connected',conn_off:'Not connected',no_reading:'no reading yet',up_now:'updated just now',up_min:'updated {n} min ago',up_hour:'updated {n} h ago',up_day:'updated {n} d ago',motion_y:'motion',motion_n:'still',alarm_off:'Alarm off',s_disarmed:'Off',s_home:'Silent',s_away:'Full alarm',s_trig:'⚠️ TRIGGERED',a_off:'Off',a_home:'Silent',a_away:'Full alarm',alarm_off_hint:'Alarm is off (see Settings)',alarm_enable:'Enable alarm',alarm_disable:'Disable alarm',now_off:'currently off',now_on:'currently on',scanning:'scanning… (±8s)',nothing:'nothing found — is the device on / in range?',pairing:'pairing…',paired_ok:'Paired ✓',paired_fail:'Failed — is the bike in pairing mode?',request_photo:'Different bike? Request your colour & model',sec_passive:'🛡️ Passive guard: the add-on only listens for the GPS module (no connection, no extra battery drain). While armed it listens almost continuously and the alarm goes off once the module hasn\\'t been heard for {n} s. When GPS says the bike is away, listening pauses until it is home again.',ext_h:'External motion sensor (on the bike)',ext_p:'Pick your own Home Assistant sensor (contact, vibration or motion) that you mount on the bike. When it turns on it counts as motion and — if the alarm is armed — triggers it. Works independently of Bluetooth.',ext_save:'Save',ext_none:'— None —',saved_ok:'Saved ✓',sens_h:'Sensors',sens_p:'Every source that can report movement or theft — the built-in bike sensors and your own HA sensors — is a row here you enable/disable individually, with the same options.',sens_add:'+ Add sensor',sens_pick:'Pick a sensor…',s_presence:'Tracker presence (out of range)',s_ext:'External sensor',o_role:'Role:',role_alarm:'Alarm',role_motion:'Motion only',o_alwayson:'Always on (even when disarmed)',o_unavail:'Unavailable = tamper',o_invert:'Invert',o_dbl:'Double-check',m_silent:'Silent',m_loud:'Full alarm',entry_delay:'Entry delay',exit_delay:'Exit delay',sens_delay_hint:'Exit = grace after arming before sensors count (riding away). Entry = grace before the alarm actually fires.',dbl_win:'Double-check window',dbl_hint:'Sensors marked “Double-check” only trip the alarm once at least two confirm together within this window.',st_unavail:'unavailable',cloud:'Cloud (PON)',cloud_charge:'Module charge (cloud)',cloud_loc:'Location',cl_moving:'Moving',cl_parked:'Parked',cloud_home:'Distance from home',at_home:'Home',away:'Away',mb_in:'Main battery in (module charging)',mb_out:'Main battery out (module on its own)',bosch_h:'Battery & service',b_soh:'Health',b_cycles:'Charge cycles',b_energy:'Delivered',b_motor:'Motor hours',b_service:'Next service',b_sw:'Software',cloud_accounts:'Cloud accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (location/GPS)',acc_bosch:'Bosch (diagnostics)',acc_linked:'linked ✓',acc_off:'not set',acc_hint:'Live data comes over Bluetooth (scan below). Diagnostics and location come from your Bosch/PON account (add-on Settings) — that bike is linked automatically, without a scan.',your_bike:'your registered bike',registered:'registered',acc_checking:'checking…',activities:'Activity',act_ride_start:'Ride started',act_ride_stop:'Ride stopped',act_left_home:'Left home',act_arrived_home:'Arrived home',act_moved:'Moved',act_none:'no activity recorded yet',ranges_short:'range',same_dist:'same distance as your bike — likely yours'}};
 const t=(k,n)=>((T[LANG]||T.en)[k]||k).replace('{n}',n);
 function applyI18n(){document.querySelectorAll('[data-i18n]').forEach(e=>{e.textContent=t(e.dataset.i18n)});}
 const MC={Turbo:'#e2241a',Auto:'#7b3ff2','Tour+':'#1aa3e0',Tour:'#1aa3e0',Eco:'#5fb336',Off:'#8a8a8a'};
@@ -3494,7 +3387,6 @@ function sgroup(ref,el){SENS.external[+ref].group=el.checked?'dbl':'';renderDela
 function sdelay(field,el){SENS[field]=Math.max(0,parseInt(el.value||'0'));}
 function swin(el){SENS.groups.dbl.window=Math.max(1,parseInt(el.value||'30'));}
 function badgeB(key){const L=(LIVE&&LIVE[key])||{};
-  if(key=='tracker_motion')return !L.connected?t('conn_off'):(L.active?t('motion_y'):t('motion_n'));
   return L.present?t('in_range'):t('out_range');}
 function badgeE(c){const raw=LIVE.external&&LIVE.external[c.entity_id];
   if(!c.entity_id)return '';if(raw=='unavailable')return t('st_unavail');
@@ -3521,7 +3413,6 @@ function srow(kind,ref,name,c,bid,btxt,ext,rm){
     h+=`<select class=epick onchange="sentity('${ref}',this)">${os}</select>`;}
   return h+optRow(kind,ref,c,ext)+`</div>`;}
 function renderSensors(){let h='';
-  h+=srow('builtin','tracker_motion',t('s_tracker'),SENS.builtin.tracker_motion,'sb_b_tracker_motion',badgeB('tracker_motion'),false,false);
   h+=srow('builtin','presence',t('s_presence'),SENS.builtin.presence,'sb_b_presence',badgeB('presence'),false,false);
   (SENS.external||[]).forEach((c,i)=>{h+=srow('ext',''+i,c.name||t('s_ext'),c,'sb_e_'+i,badgeE(c),true,true);});
   $('#sensList').innerHTML=h;renderDelays();}
@@ -3541,8 +3432,7 @@ async function saveSensors(){const used=(SENS.external||[]).some(c=>c.group=='db
   $('#sensMsg').textContent=' '+t('saved_ok');setTimeout(()=>{$('#sensMsg').textContent='';},2500);}
 async function refreshSensLive(){if(_tab!='set'||!SENS)return;
   let d;try{d=await api('api/sensors');}catch(e){return;}LIVE=d.live||{};
-  let el=$('#sb_b_tracker_motion');if(el)el.textContent=badgeB('tracker_motion');
-  el=$('#sb_b_presence');if(el)el.textContent=badgeB('presence');
+  let el=$('#sb_b_presence');if(el)el.textContent=badgeB('presence');
   (SENS.external||[]).forEach((c,i)=>{const e=$('#sb_e_'+i);if(e)e.textContent=badgeE(c);});}
 function rt(){const added=window._added!==false;
   const obVis=!added&&_tab=='dash';
@@ -3571,7 +3461,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
     const conn=fresh(L.last_updated);
     $('#addedConn').innerHTML=conn?`<span style="color:#43a047">✓ ${t('conn_on')}</span>`:`<span class=muted>${t('conn_off')}</span>`;
     $('#pairArea').classList.toggle('hidden', conn);}
-  $('#devBar').style.display=(s.probe||s.motion_test)?'':'none';
+  $('#devBar').style.display=(s.motion_test)?'':'none';
   $('#bikeTitle').textContent=L.bike_model||L.product_name||L.bike_brand||di.manufacturer||dev.manufacturer||'Bosch eBike';
   $('#bikeSpec').textContent=L.last_updated?ago(L.last_updated):t('no_reading');
   const f=fresh(L.last_updated);
@@ -3649,7 +3539,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const GRN='rgba(67,160,71,.18)',GRNC='#43a047',AMB='rgba(251,140,0,.16)',AMBC='#fb8c00';
   // BLE presence is authoritative for home (seeing the tracker = home, no battery
   // cost). If BLE can't see it, it's NOT home — show riding/away from the cloud.
-  const homeBLE=L.tracker_connected||L.tracker_present===true;
+  const homeBLE=L.tracker_present===true;
   if(homeBLE)setPill(GRN,GRNC,t('at_home'));
   else if(CLp&&CLp.in_use)setPill(AMB,AMBC,t('cl_moving'));
   else if(CLp&&CLp.distance_m!=null&&CLp.distance_m>100)setPill(AMB,AMBC,fmtDist(CLp.distance_m));
@@ -3690,7 +3580,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const A=L.alarm; const nm={disarmed:t('s_disarmed'),armed_home:t('s_home'),armed_away:t('s_away'),triggered:t('s_trig')}[A]||'—';
   const mv=L.motion?t('motion_y'):t('motion_n');const tb=L.tracker_battery;
   $('#secLine').innerHTML=(s.alarm_off?t('alarm_off')+' · '+mv:`${nm} · ${mv}`);
-  $('#secWarn').textContent=s.passive_guard?t('sec_passive').replace('{n}',s.alarm_grace_s):t('sec_warn');
+  $('#secWarn').textContent=t('sec_passive').replace('{n}',s.alarm_grace_s);
   $('#armBox').innerHTML=s.alarm_off?`<span class=muted>${t('alarm_off_hint')}</span>`:
     [['DISARM','a_off','disarmed'],['ARM_HOME','a_home','armed_home'],['ARM_AWAY','a_away','armed_away']].map(([c,lk,st])=>
      `<button class="${A==st?'':'sec'}" onclick="arm('${c}')">${t(lk)}</button>`).join('');
@@ -3768,12 +3658,10 @@ applyI18n();refresh();setInterval(refresh,5000);
 async def _ui_status(_request):
     return web.json_response({"bike": _bike_addr, "locked": _locked_addr,
                               "tracker": _tracker_mac, "tracker_off": _tracker_off,
-                              "alarm_off": _alarm_off, "probe": _probe_frames,
+                              "alarm_off": _alarm_off,
                               "motion_test": _motion_test,
                               "bike_off": _bike_off,
                               "presence_alarm": _presence_alarm,
-                              "passive_guard": not (_tracker_always or _probe_frames) and not
-                              _sensors["builtin"]["tracker_motion"].get("enabled", True),
                               "alarm_grace_s": int(PRESENCE_ALARM_GRACE),
                               "presence_mode": _pres["mode"],
                               "ble_proxy": bool(_PROXY_HOST and _PROXY_KEY),
@@ -3912,8 +3800,6 @@ async def _ui_sensors(_request):
     """Full sensor registry + candidate HA entities + live per-source state, for
     the Sensoren card."""
     live = {
-        "tracker_motion": {"active": _motion_src.get("tracker_motion", False),
-                           "connected": bool(_last.get("tracker_connected"))},
         "presence": {"present": bool(_last.get("tracker_present", True))},
         "external": dict(_ext_live),
     }
@@ -3952,7 +3838,6 @@ async def _ui_set_sensors(request):
     b = inc.get("builtin") or {}
     clean = {
         "builtin": {
-            "tracker_motion": _clean_row(b.get("tracker_motion") or {}, ext=False),
             "presence": _clean_row(b.get("presence") or {}, ext=False),
         },
         "external": [],
@@ -3979,7 +3864,7 @@ async def _ui_set_sensors(request):
     _sensors = clean
     _save_cfg()
     # Drop live motion from sources that no longer exist or were disabled.
-    valid = {"tracker_motion", "presence"} | {_ext_key(r) for r in clean["external"]}
+    valid = {"presence"} | {_ext_key(r) for r in clean["external"]}
     for k in list(_motion_src):
         if k not in valid:
             _motion_src.pop(k, None)

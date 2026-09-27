@@ -29,8 +29,6 @@ def p(r, fake_mqtt, monkeypatch):
     monkeypatch.setattr(r, "_sensors", {
         "entry_delay": 0, "exit_delay": 0, "groups": {},
         "builtin": {
-            "tracker_motion": {"enabled": False, "role": "alarm",
-                               "modes": ["armed_away"]},
             "presence": {"enabled": True, "role": "alarm",
                          "modes": ["armed_away", "armed_home", "armed_night"]},
         }})
@@ -120,13 +118,18 @@ def test_longest_silence_only_counts_while_guarding(p, fake_mqtt):
     assert fake_mqtt.topic(p.PRESENCE_GAP_TOPIC)[-1] == "12"   # not 28 or 14
 
 
-async def test_status_reports_passive_guard(p, monkeypatch):
-    monkeypatch.setattr(p, "_tracker_always", False)
-    monkeypatch.setattr(p, "_probe_frames", False)
+async def test_status_reports_the_alarm_delay(p):
     resp = await p._ui_status(None)
     body = json.loads(resp.body)
-    assert body["passive_guard"] is True
     assert body["alarm_grace_s"] == 300
+    assert "passive_guard" not in body and "probe" not in body
+
+
+def test_old_ble_motion_sensor_row_is_dropped(r):
+    old = {"sensors": {"builtin": {"tracker_motion": {"enabled": True},
+                                   "presence": {"enabled": True}},
+                       "external": []}}
+    assert list(r._migrate_sensors(old)["builtin"]) == ["presence"]
 
 
 # ------------------------------------------------------------ scan cadence
@@ -182,15 +185,17 @@ def test_a_neighbours_tracker_does_not_count(p):
 # ------------------------------------------------------------ motion test
 
 
-def test_motion_test_logs_only_changed_cloud_fields(r, caplog):
+def test_module_reports_log_only_changed_fields(p, caplog):
     import logging
-    r._mt_cloud_prev.clear()
+    p._module_prev.clear()
     caplog.set_level(logging.INFO)
-    r._motion_test_cloud({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
-    r._motion_test_cloud({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
-    r._motion_test_cloud({"lastOnline": "t2", "location": {"coordinate": {"latitude": 1}}})
-    lines = [rec.getMessage() for rec in caplog.records if "MOTION TEST cloud" in rec.getMessage()]
-    assert lines[0].startswith("MOTION TEST cloud: baseline")
-    assert lines[1] == "MOTION TEST cloud: unchanged"
-    assert lines[2] == 'MOTION TEST cloud: changed {"lastOnline": "t2"}'
-    r._mt_cloud_prev.clear()
+    p._alarm["state"] = "armed_away"
+    p._log_module_report({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
+    p._log_module_report({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
+    p._log_module_report({"lastOnline": "t2", "location": {"coordinate": {"latitude": 1}}})
+    lines = [rec.getMessage() for rec in caplog.records
+             if "PON module report" in rec.getMessage()]
+    assert lines[0].startswith("PON module report: baseline (armed)")
+    assert lines[1] == 'PON module report: changed (armed) {"lastOnline": "t2"}'
+    assert len(lines) == 2                          # no "unchanged" noise
+    p._module_prev.clear()

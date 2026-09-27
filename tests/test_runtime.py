@@ -42,36 +42,6 @@ async def test_spawned_task_is_referenced_and_its_crash_logged(r, caplog):
     assert any("bad-task failed" in m for m in caplog.messages)
 
 
-async def test_motion_watcher_survives_a_scan_error(r, monkeypatch):
-    """A BlueZ error while scanning for the tracker used to kill the watcher
-    (and with it the armed alarm's motion sensor) until the add-on restarted."""
-    calls = []
-
-    async def find_comodule():
-        calls.append(1)
-        if len(calls) == 1:
-            raise RuntimeError("org.bluez.Error.InProgress")
-        return None
-
-    real_sleep = asyncio.sleep
-
-    async def fast_sleep(_delay, *args, **kwargs):
-        await real_sleep(0)
-
-    monkeypatch.setattr(r, "_want_tracker", lambda: True)
-    monkeypatch.setattr(r, "find_comodule", find_comodule)
-    monkeypatch.setattr(r.asyncio, "sleep", fast_sleep)
-    task = asyncio.get_running_loop().create_task(r.motion_watcher())
-    for _ in range(200):
-        if len(calls) >= 3:
-            break
-        await real_sleep(0.001)
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
-    assert len(calls) >= 3
-    assert r._last.get("tracker_connected") is False
-
-
 @pytest.mark.parametrize(("fails", "expected"), [(0, 3.0), (1, 6.0), (2, 12.0), (3, 24.0),
                                                   (6, 120.0), (50, 120.0)])
 def test_read_retry_backoff(r, monkeypatch, fails, expected):

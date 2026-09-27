@@ -38,7 +38,6 @@ Proxmox/hypervisor host). See [`tools/`](tools/):
 - `bosch_mqtt_reader.py` — the reader (battery → MQTT discovery).
 - `bosch-bike-reader.service` — a systemd unit.
 - `bosch_test_read.py` — one-shot read to verify a bonded link.
-- `comodule_motion_test.py` — experiment for the COMODULE tracker's motion data.
 
 Pair once with `bluetoothctl` (the bike uses Just Works — no code), `trust` it,
 then run the reader. The on-disk bond survives reboots.
