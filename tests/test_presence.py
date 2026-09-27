@@ -177,3 +177,20 @@ def test_any_scan_hearing_our_tracker_counts_for_presence(p, monkeypatch):
 def test_a_neighbours_tracker_does_not_count(p):
     p._record(*_advert("URBANARROW", "11:22:33:44:55:66"))
     assert p._tracker_seen_ts == 0.0
+
+
+# ------------------------------------------------------------ motion test
+
+
+def test_motion_test_logs_only_changed_cloud_fields(r, caplog):
+    import logging
+    r._mt_cloud_prev.clear()
+    caplog.set_level(logging.INFO)
+    r._motion_test_cloud({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
+    r._motion_test_cloud({"lastOnline": "t1", "location": {"coordinate": {"latitude": 1}}})
+    r._motion_test_cloud({"lastOnline": "t2", "location": {"coordinate": {"latitude": 1}}})
+    lines = [rec.getMessage() for rec in caplog.records if "MOTION TEST cloud" in rec.getMessage()]
+    assert lines[0].startswith("MOTION TEST cloud: baseline")
+    assert lines[1] == "MOTION TEST cloud: unchanged"
+    assert lines[2] == 'MOTION TEST cloud: changed {"lastOnline": "t2"}'
+    r._mt_cloud_prev.clear()

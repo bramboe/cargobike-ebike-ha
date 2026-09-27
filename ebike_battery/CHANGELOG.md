@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.66.0 — one motion test instead of two probes
+
+- New developer option **Motion test** (`motion_test`), replacing *Advertisement
+  probe* and *Hub wake-on-motion probe*. It never connects. It logs, all at once:
+  - the GPS module's full advertisement, rate and signal strength every 10 s;
+  - whether the Bosch hub starts advertising;
+  - which fields of the PON cloud state change (polled every 30 s during the test).
+
+  Rest, move the bike, rest, and compare the `MOTION TEST` log lines.
+
 ## 2.65.0 — 45-second guard, silence measured while armed
 
 - The presence alarm now goes off after **45 s** by default (was 30). While
