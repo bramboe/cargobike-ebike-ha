@@ -446,17 +446,13 @@ _pending_reason: str = ""
 
 _PROBE_SKIP = (0xD1, 0xC8)   # frame types that flood continuously — never probed
 _probe_last: dict[int, bytes] = {}
-# DEVELOPER ADV PROBE (adv_probe): passively scan and log the COMODULE's whole
-# advertisement (all manufacturer/service data) whenever it CHANGES — to find out
-# if the module signals motion in its advert (so we could detect movement WITHOUT
-# holding a connection = big battery saving). Purely passive (no connection).
-_adv_probe: bool = os.getenv("ADV_PROBE", "0") == "1"
-_adv_last: dict[str, str] = {}
-# DEVELOPER HUB PROBE (hub_probe): passively test whether the Bosch HUB starts
-# advertising on motion (wake-on-motion). If it does, that's a zero-module-cost
-# movement signal using the bike's big battery. Logs the hub advert appearing/
-# disappearing WITHOUT connecting; pauses the normal bike read loop while on.
-_hub_probe: bool = os.getenv("HUB_PROBE", "0") == "1"
+# DEVELOPER MOTION TEST (motion_test): one connection-free look at every passive
+# channel that might reveal movement — the tracker advert (payload, rate,
+# scan-response), the Bosch hub waking up, and the PON cloud state — so a
+# deliberate rest / move / rest session can be read back from the log. Holds the
+# BLE adapter while on (bike reads and presence pause).
+_motion_test: bool = os.getenv("MOTION_TEST", "0") == "1"
+MOTION_TEST_POLL = 30.0   # PON poll interval (s) while the test runs
 # Optional remote ESPHome Bluetooth proxy for the presence layer: lets HA hear the
 # tracker from a second spot (e.g. the shed) so "in range" is more robust and the
 # bike has to leave EVERY listener's range before the leave-range alarm fires.
@@ -2009,7 +2005,7 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
                 publish_status("No bike added", "OFF")
                 await asyncio.sleep(4)
                 continue
-            if _hub_probe:                    # dev: let hub_probe own the adapter
+            if _motion_test:                  # dev: let motion_test own the adapter
                 await asyncio.sleep(4)
                 continue
             device = await find_bike(timeout=15.0)
@@ -2389,7 +2385,7 @@ async def presence_loop() -> None:
                 _pres.update(had=False, alarm_edge=False)
                 await asyncio.sleep(PRESENCE_GAP)
                 continue
-            if _adv_probe or _hub_probe:
+            if _motion_test:
                 # A diagnostic probe holds the scan adapter continuously, so presence
                 # scans would starve and falsely flip to "out of range" (and could
                 # trip the alarm). Hold the last state while a probe runs.
@@ -2499,46 +2495,6 @@ async def proxy_presence_loop() -> None:
             await asyncio.sleep(3600)
     except Exception as err:  # noqa: BLE001
         log.warning("BLE proxy loop failed (%s): %s", _PROXY_HOST, err)
-
-
-async def hub_probe_loop() -> None:
-    """DEV (hub_probe): passively test whether the Bosch HUB advertises on motion
-    (wake-on-motion) — a zero-module-cost movement signal that uses the bike's big
-    battery, not the tracker. Logs when the 'smart system eBike' advert appears /
-    disappears, with RSSI, WITHOUT connecting. The normal read loop is paused while
-    on (see ble_loop) so its connect attempts don't muddy the advertising picture.
-    Test: leave the bike at rest, then move it WITHOUT pressing anything, and watch
-    for 'HUB ADV appeared'."""
-    GONE_AFTER = 15.0
-    last_seen: dict[str, float] = {}
-    present: dict[str, bool] = {}
-
-    def cb(device, adv) -> None:
-        if NAME_MATCH not in (device.name or "").lower():
-            return
-        addr = device.address
-        last_seen[addr] = time.monotonic()
-        if not present.get(addr):
-            present[addr] = True
-            log.info("HUB ADV appeared [%s @ %sdBm] '%s'", addr,
-                     getattr(adv, "rssi", "?"), device.name or "")
-
-    while True:
-        if not _hub_probe:
-            await asyncio.sleep(4)
-            continue
-        try:
-            async with _scan_lock, BleakScanner(detection_callback=cb):
-                while _hub_probe:
-                    await asyncio.sleep(3)
-                    now = time.monotonic()
-                    for addr in list(present):
-                        if present[addr] and now - last_seen.get(addr, 0) > GONE_AFTER:
-                            present[addr] = False
-                            log.info("HUB ADV gone [%s] (silent %.0fs)", addr, GONE_AFTER)
-        except Exception as err:  # noqa: BLE001
-            log.debug("hub probe scan failed: %s", err)
-            await asyncio.sleep(2)
 
 
 async def _ha_get(path: str):
@@ -2821,6 +2777,8 @@ async def pon_cloud_loop() -> None:
                              lk[0] if lk else None)
             elif isinstance(lk, dict):
                 entry = lk
+            if entry and _motion_test:
+                _motion_test_cloud(entry)
             if entry:
                 if entry.get("lastOnline"):
                     payload["last_online"] = entry["lastOnline"]
@@ -2887,7 +2845,8 @@ async def pon_cloud_loop() -> None:
         # sees it switch on, arrive or leave (see _cloud_wake).
         try:
             await asyncio.wait_for(_cloud_wake_evt.wait(),
-                                   timeout=PON_POLL_HOME if slow else PON_POLL)
+                                   timeout=(MOTION_TEST_POLL if _motion_test
+                                            else PON_POLL_HOME if slow else PON_POLL))
         except asyncio.TimeoutError:
             pass
         _cloud_wake_evt.clear()
@@ -3164,75 +3123,118 @@ async def start_motion(_mqtt_client: mqtt.Client) -> None:
     _supervise("proxy_presence_loop", proxy_presence_loop)
     _supervise("ext_motion_loop", ext_motion_loop)
     _supervise("alarm_timing_loop", alarm_timing_loop)
-    _supervise("hub_probe_loop", hub_probe_loop)
 
 
-async def adv_probe_loop() -> None:
-    """DEV (adv_probe): characterise the tracker's advertising WITHOUT connecting,
-    to test the two remaining passive-motion hypotheses:
-      (1) advert RATE/interval changes on motion — log adverts/sec + gap spread per
-          10s window (rest vs shake comparison),
-      (2) a motion flag hides in the SCAN-RESPONSE or other AD fields we never
-          logged — use ACTIVE scanning and dump the FULL AdvertisementData
-          (local_name, tx_power, service_uuids, manufacturer + service data),
-          logging a line whenever ANY of those fields changes.
-    Holds the BLE adapter while on (normal reads + presence pause)."""
-    RATE_WINDOW = 10.0
-    arr: dict[str, list[float]] = {}      # arrival monotonic ts per address (rate)
-    last_ts: dict[str, float] = {}        # previous arrival, for inter-arrival gap
-    last_sig: dict[str, str] = {}         # full-field signature per address
+async def motion_test_loop() -> None:
+    """DEV (motion_test): log every passive channel that could show movement,
+    WITHOUT connecting to anything:
+      tracker — our module's full advertisement (active scan, so the scan-response
+                too) whenever any field changes, plus rate and RSSI per 10 s;
+      hub     — the Bosch hub's advert appearing / disappearing (wake-on-motion);
+      cloud   — changed fields of PON's last-known state (see _motion_test_cloud).
+    Rest, move, rest, and compare the log lines per phase."""
+    WINDOW = 10.0
+    HUB_GONE_AFTER = 15.0
+    arr: dict[str, list] = {}             # address -> [(monotonic ts, rssi)]
+    last_sig: dict[str, str] = {}
+    hub_seen: dict[str, float] = {}
+    hub_on: dict[str, bool] = {}
 
     def cb(device, adv) -> None:
-        if _record(device, adv) != "tracker":
-            return
-        addr = device.address
+        kind = _record(device, adv)
         now = time.monotonic()
-        gap = now - last_ts.get(addr, now)
-        last_ts[addr] = now
-        arr.setdefault(addr, []).append(now)
-        # (2) Full advertisement signature, incl. scan-response-only fields.
-        sig_parts = [f"name={adv.local_name!r}",
-                     f"tx={getattr(adv, 'tx_power', None)}",
-                     f"uuids={list(adv.service_uuids or [])}"]
-        for cid, val in (adv.manufacturer_data or {}).items():
-            sig_parts.append(f"mfr{cid:04x}={bytes(val).hex()}")
-        for uuid, val in (adv.service_data or {}).items():
-            sig_parts.append(f"svc{uuid[-4:]}={bytes(val).hex()}")
-        sig = " ".join(sig_parts)
-        if last_sig.get(addr) != sig:
-            last_sig[addr] = sig
-            log.info("ADV FIELDS [%s @ %sdBm gap=%.2fs CHANGED]: %s",
-                     addr, getattr(adv, "rssi", "?"), gap, sig)
+        rssi = getattr(adv, "rssi", None)
+        if kind == "bike":
+            hub_seen[device.address] = now
+            if not hub_on.get(device.address):
+                hub_on[device.address] = True
+                log.info("MOTION TEST hub: advert APPEARED [%s @ %sdBm] '%s'",
+                         device.address, rssi, device.name or "")
+            return
+        if kind != "tracker":
+            return
+        if _tracker_mac and (_tracker_module_mac(adv) or "").upper() != _tracker_mac.upper():
+            return                                  # a neighbour's module
+        arr.setdefault(device.address, []).append((now, rssi))
+        parts = [f"name={adv.local_name!r}", f"tx={getattr(adv, 'tx_power', None)}",
+                 f"uuids={sorted(adv.service_uuids or [])}"]
+        parts += [f"mfr{cid:04x}={bytes(v).hex()}"
+                  for cid, v in sorted((adv.manufacturer_data or {}).items())]
+        parts += [f"svc{u[-4:]}={bytes(v).hex()}"
+                  for u, v in sorted((adv.service_data or {}).items())]
+        sig = " ".join(parts)
+        if last_sig.get(device.address) != sig:
+            log.info("MOTION TEST tracker: advert %s [%s @ %sdBm]: %s",
+                     "CHANGED" if device.address in last_sig else "first",
+                     device.address, rssi, sig)
+            last_sig[device.address] = sig
 
     while True:
-        if not _adv_probe:
+        if not _motion_test:
             await asyncio.sleep(4)
             continue
+        log.info("MOTION TEST started — rest, move the bike, rest; nothing connects")
         try:
-            # ACTIVE scanning so the tracker's scan-response is solicited too.
             async with _scan_lock, BleakScanner(detection_callback=cb,
                                                 scanning_mode="active"):
-                while _adv_probe:
-                    await asyncio.sleep(RATE_WINDOW)
+                while _motion_test:
+                    await asyncio.sleep(WINDOW)
                     now = time.monotonic()
                     for addr in list(arr):
-                        recent = [t for t in arr[addr] if now - t <= RATE_WINDOW]
+                        recent = [(t, r) for t, r in arr[addr] if now - t <= WINDOW]
                         arr[addr] = recent
                         if not recent:
+                            log.info("MOTION TEST tracker: [%s] silent for %.0fs",
+                                     addr, WINDOW)
                             continue
-                        gaps = [recent[i] - recent[i - 1]
-                                for i in range(1, len(recent))]
-                        mn = min(gaps) if gaps else 0.0
-                        mx = max(gaps) if gaps else 0.0
-                        avg = (sum(gaps) / len(gaps)) if gaps else 0.0
-                        # (1) Rate summary — compare adverts/sec rest vs motion.
-                        log.info("ADV RATE [%s]: %d in %.0fs = %.1f/s  "
-                                 "gap min/avg/max %.2f/%.2f/%.2fs", addr,
-                                 len(recent), RATE_WINDOW, len(recent) / RATE_WINDOW,
-                                 mn, avg, mx)
+                        ts = [t for t, _r in recent]
+                        gaps = [ts[i] - ts[i - 1] for i in range(1, len(ts))] or [0.0]
+                        rs = [r for _t, r in recent if isinstance(r, (int, float))]
+                        log.info("MOTION TEST tracker: [%s] %d adverts/%.0fs, gap "
+                                 "min/max %.2f/%.2fs, rssi %s..%s", addr, len(recent),
+                                 WINDOW, min(gaps), max(gaps),
+                                 min(rs) if rs else "?", max(rs) if rs else "?")
+                    for addr, on in list(hub_on.items()):
+                        if on and now - hub_seen.get(addr, 0) > HUB_GONE_AFTER:
+                            hub_on[addr] = False
+                            log.info("MOTION TEST hub: advert GONE [%s]", addr)
         except Exception as err:  # noqa: BLE001
-            log.debug("adv probe scan failed: %s", err)
+            log.warning("motion test scan: %s", _err_text(err))
             await asyncio.sleep(2)
+
+
+_mt_cloud_prev: dict = {}
+
+
+def _flatten(obj, prefix: str = "") -> dict:
+    """{'a': {'b': 1}} -> {'a.b': 1}; lists indexed as a.0.b."""
+    out: dict = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.update(_flatten(v, f"{prefix}{k}."))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            out.update(_flatten(v, f"{prefix}{i}."))
+    else:
+        out[prefix[:-1]] = obj
+    return out
+
+
+def _motion_test_cloud(entry: dict) -> None:
+    """DEV (motion_test): log which fields of PON's last-known state changed since
+    the previous poll — does the module report movement on its own?"""
+    flat = _flatten(entry)
+    changed = {k: v for k, v in flat.items() if _mt_cloud_prev.get(k) != v}
+    gone = sorted(k for k in _mt_cloud_prev if k not in flat)
+    if not _mt_cloud_prev:
+        log.info("MOTION TEST cloud: baseline %s", json.dumps(flat, default=str))
+    elif changed or gone:
+        log.info("MOTION TEST cloud: changed %s%s", json.dumps(changed, default=str),
+                 f" gone {gone}" if gone else "")
+    else:
+        log.info("MOTION TEST cloud: unchanged")
+    _mt_cloud_prev.clear()
+    _mt_cloud_prev.update(flat)
 
 
 # ------------------------------------------------------------- setup UI (Ingress)
@@ -3569,7 +3571,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
     const conn=fresh(L.last_updated);
     $('#addedConn').innerHTML=conn?`<span style="color:#43a047">✓ ${t('conn_on')}</span>`:`<span class=muted>${t('conn_off')}</span>`;
     $('#pairArea').classList.toggle('hidden', conn);}
-  $('#devBar').style.display=(s.probe||s.adv_probe||s.hub_probe)?'':'none';
+  $('#devBar').style.display=(s.probe||s.motion_test)?'':'none';
   $('#bikeTitle').textContent=L.bike_model||L.product_name||L.bike_brand||di.manufacturer||dev.manufacturer||'Bosch eBike';
   $('#bikeSpec').textContent=L.last_updated?ago(L.last_updated):t('no_reading');
   const f=fresh(L.last_updated);
@@ -3767,7 +3769,7 @@ async def _ui_status(_request):
     return web.json_response({"bike": _bike_addr, "locked": _locked_addr,
                               "tracker": _tracker_mac, "tracker_off": _tracker_off,
                               "alarm_off": _alarm_off, "probe": _probe_frames,
-                              "adv_probe": _adv_probe, "hub_probe": _hub_probe,
+                              "motion_test": _motion_test,
                               "bike_off": _bike_off,
                               "presence_alarm": _presence_alarm,
                               "passive_guard": not (_tracker_always or _probe_frames) and not
@@ -4129,7 +4131,7 @@ async def main() -> None:
     # (it then refreshes when the bike is on or the alarm is armed, idle otherwise).
     _spawn(read_tracker_battery(), "tracker_battery_startup")
     _supervise("persist_last", _persist_last_loop)   # keep the on-disk snapshot fresh
-    _supervise("adv_probe", adv_probe_loop)      # dev: passive adv logging when enabled
+    _supervise("motion_test", motion_test_loop)  # dev: passive motion channels test
     _supervise("pon_cloud", pon_cloud_loop)      # additive cloud poll (no BLE)
     _supervise("bosch_cloud", bosch_cloud_loop)  # additive Bosch health/service poll
     await _run_forever("ble_loop", lambda: ble_loop(_mqtt))

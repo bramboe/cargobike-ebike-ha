@@ -95,25 +95,14 @@ configuration:
       houdt de tracker verbonden om signalen te reverse-engineeren (bijv. de
       hoofdaccu-vlag). Laat de module-accu sneller leeglopen — laat UIT bij normaal
       gebruik. Zolang 'ie aan staat verschijnt een melding in het paneel.
-  adv_probe:
-    name: Advertentie-probe (ontwikkelaar)
+  motion_test:
+    name: Beweegtest (ontwikkelaar)
     description: >-
-      Alleen voor ontwikkeling/diagnostiek. Verbindingsloze test voor passieve
-      bewegingsdetectie: logt de FREQUENTIE van de advertentie (advertenties/sec +
-      spreiding, per 10s) en de VOLLEDIGE advertentie incl. scan-response (active
-      scan) zodra een veld verandert — om te zien of beweging zichtbaar is in de
-      timing of de scan-response. Geen extra verbruik van de module, maar houdt de
-      BLE-adapter bezet (normale uitlezingen en aanwezigheid pauzeren). Draai 'm
-      disarmed en zet 'm daarna weer uit.
-  hub_probe:
-    name: Hub wake-on-motion-probe (ontwikkelaar)
-    description: >-
-      Alleen voor ontwikkeling/diagnostiek. Test of de Bosch-HUB gaat adverteren
-      wanneer de fiets beweegt (wake-on-motion) — dat zou een bewegingssignaal geven
-      dat de grote fietsaccu gebruikt in plaats van de tracker-module. Logt passief
-      het verschijnen/verdwijnen van de hub-advertentie zonder te verbinden; pauzeert
-      de normale uitleeslus zolang 'ie aan staat. Beweeg de fiets zonder iets in te
-      drukken, en zet 'm daarna weer uit.
+      Alleen voor een test. Luistert zonder verbinding te maken naar alles wat
+      beweging zou kunnen verraden: de advertentie van de GPS-module (inhoud, ritme,
+      signaalsterkte), of de Bosch-hub wakker wordt, en wat de PON-cloud meldt (elke
+      30 s). Zet 'm aan, laat de fiets even stil staan, beweeg hem, laat hem weer stil
+      staan, en zet 'm daarna uit. Bewaking en uitlezen pauzeren zolang hij aan staat.
   mqtt_host:
     name: MQTT-host
     description: Optionele MQTT-broker override. Leeg laten om de Mosquitto add-on te gebruiken.

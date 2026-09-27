@@ -92,23 +92,14 @@ configuration:
       the tracker connected to reverse-engineer signals (e.g. the main-battery
       flag). Drains the module battery faster — leave OFF for normal use. A banner
       shows in the panel while it is on.
-  adv_probe:
-    name: Advertisement probe (developer)
+  motion_test:
+    name: Motion test (developer)
     description: >-
-      Developer/diagnostic only. Connection-free test for passive motion detection:
-      logs the tracker's advertisement RATE (adverts/sec + gap spread, per 10s) and
-      the FULL advertisement incl. the scan-response (active scan) whenever any field
-      changes — to see if movement shows up in the advert timing or scan-response.
-      No battery drain on the module, but it holds the BLE adapter, so normal reads
-      and presence pause while it is on. Run it disarmed and turn it off afterwards.
-  hub_probe:
-    name: Hub wake-on-motion probe (developer)
-    description: >-
-      Developer/diagnostic only. Tests whether the Bosch HUB starts advertising when
-      the bike is moved (wake-on-motion) — which would give a movement signal that
-      uses the bike's big battery, not the tracker module. Passively logs the hub
-      advert appearing/disappearing without connecting; pauses the normal read loop
-      while on. Move the bike without pressing anything, then turn this off again.
+      For a test only. Listens, without connecting, to everything that might
+      reveal movement: the GPS module's advertisement (content, rate, signal
+      strength), whether the Bosch hub wakes up, and what the PON cloud reports
+      (every 30 s). Turn it on, leave the bike still, move it, leave it still again,
+      then turn it off. Guarding and reading pause while it is on.
   mqtt_host:
     name: MQTT host
     description: Optional MQTT broker override. Leave empty to use the Mosquitto add-on.

@@ -54,9 +54,8 @@ if [[ -z "$PAS" || "$PAS" == "null" ]]; then PAS=45; fi
 export PRESENCE_ALARM_GRACE="$PAS"
 # TEMPORARY: log distinct COMODULE 155e status frames (find the main-battery flag).
 if bashio::config.true 'probe_frames'; then export PROBE_FRAMES=1; else export PROBE_FRAMES=0; fi
-if bashio::config.true 'adv_probe'; then export ADV_PROBE=1; else export ADV_PROBE=0; fi
-# TEMPORARY: log when the Bosch hub starts/stops advertising (wake-on-motion test).
-if bashio::config.true 'hub_probe'; then export HUB_PROBE=1; else export HUB_PROBE=0; fi
+# TEMPORARY: connection-free motion test (tracker advert, hub advert, PON cloud).
+if bashio::config.true 'motion_test'; then export MOTION_TEST=1; else export MOTION_TEST=0; fi
 
 bashio::log.info "Starting Urban Arrow battery reader (${BIKE_ADDRESS:-auto-detect})"
 exec python3 /bosch_mqtt_reader.py
