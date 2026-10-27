@@ -55,3 +55,20 @@ def test_error_text_for_bare_timeouts(r):
     assert r._err_text(asyncio.TimeoutError()).startswith("TimeoutError: timed out")
     assert r._err_text(RuntimeError("x")) == "RuntimeError: x"
     assert r._err_text(RuntimeError()) == "RuntimeError: no details"
+
+
+def test_comp_init_only_reads_and_subscribes(r):
+    """The session-init replay may only request data (issue #1): no frame may
+    write a value (clock, time zone, navigation, names) to someone's bike."""
+    assert r._COMP_INIT
+    for line in r._COMP_INIT:
+        b = bytes.fromhex(line)
+        i = 0
+        while i < len(b):
+            hdr, n = b[i], b[i + 1]
+            body = b[i + 2:i + 2 + n]
+            assert len(body) == n, line
+            # 0x10 = registration header; 0x30 + 5 bytes = read (40) / subscribe (41)
+            assert hdr == 0x10 or (hdr == 0x30 and n == 5 and body[0] in (0x40, 0x41)), \
+                b[i:i + 2 + n].hex()
+            i += 2 + n

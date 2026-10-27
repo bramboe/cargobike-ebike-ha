@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.67.1 — no more writes to the bike when connecting
+
+**Fixed: "selected date too far in the past" on the display (issue #1)**
+On every connection the add-on replayed a recorded Bosch app session
+(`comp_init.txt`) to make the bike send its component info. That recording also
+wrote values to the bike: a fixed clock time, the time zone, saved navigation
+destinations, a name, and ride-mode settings. The stale clock time made the
+display show error 113150 after connecting. The replay now only sends the
+registration header plus read and subscribe requests. It writes nothing to the
+bike any more.
+
 ## 2.67.0 — no more Bluetooth connection to the GPS module
 
 **Removed: Bluetooth motion detection ("Tracker motion")**
