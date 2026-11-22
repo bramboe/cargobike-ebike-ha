@@ -295,3 +295,13 @@ def test_main_notify_callback_feeds_diagnostics_once(r, monkeypatch):
     r._ensure_insights()
     asyncio.run(r.read_push(Client()))
     assert calls == [bytes.fromhex("30029809")]
+
+
+def test_retained_reading_for_old_bike_does_not_repopulate_selection(r, monkeypatch):
+    monkeypatch.setattr(r, "_bike_addr", "BB:BB:BB:BB:BB:BB")
+    r._handle_mqtt_message(r.STATE_TOPIC, json.dumps({"address": "AA:AA:AA:AA:AA:AA", "battery": 50}))
+    r._handle_mqtt_message(r.MODE_TOPIC, json.dumps({"mode": "Turbo"}))
+    r._handle_mqtt_message(r.RANGE_TOPIC, json.dumps({"eco": 90}))
+    assert r._last == {}
+    r._handle_mqtt_message(r.STATE_TOPIC, json.dumps({"address": "BB:BB:BB:BB:BB:BB", "battery": 80}))
+    assert r._last["battery"] == 80

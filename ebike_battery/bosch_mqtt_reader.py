@@ -1102,15 +1102,23 @@ def _handle_mqtt_message(topic: str, payload: str) -> None:
             log.info("alarm state restored: %s", state)
     elif topic == STATE_TOPIC:        # retained last reading -> show in the UI
         try:
-            _last.update(json.loads(payload))
+            data = json.loads(payload)
+            selected = _bike_addr or _locked_addr
+            if selected and str(data.get("address") or "").upper() != selected.upper():
+                return
+            _last.update(data)
         except Exception:  # noqa: BLE001
             pass
     elif topic == MODE_TOPIC:
+        if (_bike_addr or _locked_addr) and not _last.get("address"):
+            return
         try:
             _last["mode"] = json.loads(payload).get("mode")
         except Exception:  # noqa: BLE001
             pass
     elif topic == RANGE_TOPIC:
+        if (_bike_addr or _locked_addr) and not _last.get("address"):
+            return
         try:
             _last["range"] = json.loads(payload)
         except Exception:  # noqa: BLE001
@@ -1726,6 +1734,8 @@ async def read_push(client: BleakClient) -> tuple[str | None, dict[str, int] | N
 
 async def read_snapshot(mqtt_client: mqtt.Client, device) -> bool:
     """Connect, read eb21 battery + push-channel ride mode, publish (retained)."""
+    if _last.get("address") and str(_last["address"]).upper() != device.address.upper():
+        _clear_bike_readings()
     log.info("connecting to %s (%s) ...", device.address, device.name or "?")
     publish_status(f"Connected to {device.name or 'bike'} — reading…", "ON")
     generation = _bike_generation
