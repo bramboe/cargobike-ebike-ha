@@ -45,3 +45,19 @@ def test_config_and_snapshot_saves(r):
         assert json.load(fh) == {"battery": 55}      # live flags are not persisted
     with open(r.DATA_FILE) as fh:
         assert "sensors" in json.load(fh)
+
+
+async def test_maintenance_preference_persists_and_rejects_invalid_values(r):
+    class Request:
+        def __init__(self, data):
+            self.data = data
+
+        async def json(self):
+            return self.data
+
+    assert r._show_maintenance is True
+    response = await r._ui_preferences(Request({'show_maintenance': False}))
+    assert response.status == 200
+    assert r._load_cfg()['show_maintenance'] is False
+    assert (await r._ui_preferences(Request({'show_maintenance': 'false'}))).status == 400
+    assert r._show_maintenance is False

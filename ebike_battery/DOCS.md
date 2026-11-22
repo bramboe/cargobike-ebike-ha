@@ -82,6 +82,28 @@ method, sample duration, ride quality and recent history. Configure HA
 notifications/automations using these entities; the add-on sends no messages or
 controls charging sockets by itself.
 
+## Interactive dashboard
+
+The insight panel has Battery, Maintenance, Rides and Connection tabs. Select a
+battery card to inspect its meaning, BLE timestamp and availability. The
+maintenance scenario calculator lets you vary distance per ride and rides per
+week; it never changes recorded history or Home Assistant forecast entities.
+
+Filter recent observations by period and ride/interval type, inspect their
+relative distance in the chart, or download the filtered rows as CSV. Only the
+recent observations included in the status response (up to 50) are displayed.
+Missing BLE data stays unknown. Connection details explain receiver, bicycle
+and diagnostic availability, with a searchable list of supported/refused fields.
+Your selected tab, filters and scenario survive automatic data refreshes.
+
+Maintenance uses text and a blue emphasis marker: “Service approaching” at
+200 km remaining or an estimated 14 days, and “Service interval reached” at
+zero/negative remaining km. This is a planning reminder, not a mechanical fault
+assessment. Negative mileage is shown as distance beyond the configured interval.
+Settings → Display → Show maintenance hides the maintenance card, tab and cloud
+service figure for all panel users. The preference survives restarts; collection,
+MQTT entities and existing HA automations continue unchanged.
+
 ## Voltage and temperature warnings
 
 Options (editable in add-on configuration):

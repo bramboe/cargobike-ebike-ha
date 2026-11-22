@@ -1,4 +1,6 @@
 """Ingress dashboard; all untrusted values must be escaped or textContent."""
+from insight_ui import INSIGHTS_CSS, INSIGHTS_HTML, INSIGHTS_SCRIPT
+
 INDEX_HTML = """<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content='width=device-width,initial-scale=1'><title>Bosch Kiox eBike</title>
 <style>
@@ -123,7 +125,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 
   <div class='rail col-rail'>
     <div class=card><div class=lbl><span data-i18n=mode>Rijmodus</span><span class=src title=Bluetooth>📶</span></div><div class=between><div class=big id=mode>—</div><span class=pill id=modePill></span></div></div>
-    <div class=card><div class=lbl><span data-i18n=maint>Onderhoud</span><span class=src title=Bluetooth>📶</span></div><div class=big id=service>—</div><div class=sub data-i18n=maint_sub>tot de volgende servicebeurt</div><div class=sub id=serviceForecast></div></div>
+    <div class=card id=maintenanceCard><div class=lbl><span data-i18n=maint>Onderhoud</span><span class=src title=Bluetooth>📶</span></div><div class=service-notice id=serviceNotice></div><div class=big id=service>—</div><div class=sub data-i18n=maint_sub>tot de volgende servicebeurt</div><div class=sub id=serviceForecast></div><button type=button class=sec onclick="openInsights('maintenance')" id=planningOpen>Bekijk planning</button></div>
     <div class=card><div class=lbl><span data-i18n=security>Beveiliging</span><span class=src title=Bluetooth>📶</span></div><div id=secLine class=big>—</div>
       <div class=armbtns id=armBox></div><div class=warn id=secWarn></div>
       <div class=sub id=lockLine style="margin-top:14px;font-size:14px"></div></div>
@@ -144,12 +146,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 
   <div class='card col-wide'><div class=lbl><span data-i18n=mileage>Kilometerstand</span><span class=src title=Bluetooth>📶</span></div><div class=big id=odo>—</div></div>
 
-  <div class='card col-wide' id=insightsCard>
-    <div class=lbl id=insightsHeading>Bluetooth &amp; rijhistorie</div>
-    <div id=insightsValues></div><div class=sub id=insightsSource></div>
-    <details style='margin-top:12px'><summary id=capabilityHeading>BLE-veldstatussen</summary><div id=capabilityList></div></details>
-    <details style='margin-top:12px'><summary id=rideHeading>Recente ritten / meetintervallen</summary><div id=rideList></div></details>
-  </div>
+<!-- INSIGHT_PANELS -->
   <div class='card col-wide' id=boschCard style="display:none"><div class=lbl><span data-i18n=bosch_h>Accu &amp; service</span><span class=src title="Bosch cloud">☁️</span></div>
     <div class=g4 id=boschStats></div><div class=sub id=boschUpd style="margin-top:8px"></div></div>
 
@@ -174,6 +171,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 </section>
 
 <section id=set class='set hidden'>
+  <div class=card><h2 id=displayHeading></h2><label class=maintenance-toggle><input type=checkbox id=showMaintenance checked onchange='saveMaintenancePreference(this)'> <span id=showMaintenanceLabel></span></label><p class=sub id=maintenanceSettingHint></p><p class=sub id=maintenanceSaveStatus role=status></p></div>
   <div class=card>
     <h2 data-i18n=su_bike_h>1. Fiets</h2>
     <!-- Added-bike tile (shown once a bike is added) -->
@@ -326,44 +324,10 @@ function ago(iso){if(!iso)return '';const ts=Date.parse(iso);if(isNaN(ts))return
 const rel=iso=>ago(iso).replace(/^(updated|bijgewerkt) +/i,'');
 const fresh=iso=>{const ts=Date.parse(iso);return !isNaN(ts)&&(Date.now()-ts)<150000;};
 const fmtDist=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km';
-function renderInsights(I){
- const nl=LANG==='nl',pick=(a,b)=>nl?a:b;
- $('#insightsHeading').textContent=pick('Bluetooth & rijhistorie','Bluetooth & ride history');
- $('#capabilityHeading').textContent=pick('Bereikbaarheid per BLE-veld','BLE field capabilities');
- $('#rideHeading').textContent=pick('Recente ritten / meetintervallen','Recent rides / measurement intervals');
- if(!I){$('#insightsValues').textContent=pick('Wachten op Bluetooth-metingen','Waiting for Bluetooth readings');$('#serviceForecast').textContent='';return;}
- const H=I.forecast||{},C=I.connection||{},r=I.readings||{};
- const statuses={starting:pick('Starten','Starting'),reading_ok:pick('Laatste uitlezing geslaagd','Last read succeeded'),off_or_out_of_range:pick('Fiets uit of buiten bereik','Bike off or out of range'),not_paired:pick('Koppelen nodig','Pairing required'),connecting:pick('Verbinden','Connecting'),receiver_unavailable:pick('Bluetooth-ontvanger niet beschikbaar','Bluetooth receiver unavailable'),read_failed:pick('Uitlezen mislukt','Read failed'),stale:pick('Meetgegevens verouderd','Readings stale'),no_bike:pick('Geen fiets geselecteerd','No bike selected')};
- const val=(key,unit)=>I[key]!=null?esc(I[key])+' '+unit:'—';
- const rows=[
-  [pick('Verbinding','Connection'),statuses[C.state]||esc(C.state||'—')],
-  [pick('Ouderdom laatste uitlezing','Last read age'),C.age_seconds!=null?esc(Math.round(C.age_seconds/60))+' min':'—'],
-  [pick('Bluetooth-ontvanger','Bluetooth receiver'),esc(I.receiver_health||'—')],
-  [pick('Accugezondheid (BMS-schatting)','Battery health (BMS estimate)'),val('local_battery_soh','%')],
-  [pick('Volledige laadcycli','Full charge cycles'),val('local_battery_cycles','')],
-  [pick('Accuspanning','Battery voltage'),val('local_battery_voltage','V')],
-  [pick('Accutemperatuur','Battery temperature'),val('local_battery_temperature','°C')],
-  [pick('Motorprint-temperatuur','Motor PCB temperature'),val('local_motor_temperature','°C')],
-  [pick('Gemiddelde rit / interval','Average ride / interval'),val('km_per_ride','km')],
-  [pick('Ritten / intervallen per week','Rides / intervals per week'),val('rides_per_week','')]];
- $('#insightsValues').innerHTML='<dl class=tech>'+rows.map(([a,b])=>'<dt>'+esc(a)+'</dt><dd>'+b+'</dd>').join('')+'</dl>';
- let forecast='';
- if(H.forecast_status==='due')forecast=pick('Onderhoud is nu aan de beurt','Service is due now');
- else if(H.service_days!=null)forecast=pick('Nog ongeveer ','Approximately ')+H.service_days+pick(' dagen / ',' days / ')+H.service_weeks+pick(' weken',' weeks')+(H.service_rides!=null?' · ≈ '+H.service_rides+pick(' ritten/intervallen',' rides/intervals'):'');
- else forecast=({insufficient_history:pick('Nog onvoldoende historie (minimaal 7 dagen en 3 ritten/intervallen)','Not enough history yet (at least 7 days and 3 rides/intervals)'),stale_history:pick('Rijhistorie is verouderd','Ride history is stale'),no_usage:pick('Nog geen meetbaar gebruik','No measurable usage yet'),no_service_target:pick('Geen onderhoudsdrempel beschikbaar','No service target available')})[H.forecast_status]||'—';
- $('#serviceForecast').textContent=forecast;
- $('#insightsSource').textContent=pick('Bron: BLE. Schatting over maximaal 28 kalenderdagen, inclusief rustdagen. Lange meetgaten kunnen meerdere ritten bevatten.','Source: BLE. Estimate over up to 28 calendar days, including rest days. Long gaps may contain several rides.');
- const caps=I.capabilities||{};
- $('#capabilityList').innerHTML='<dl class=tech>'+Object.entries(caps).map(([a,b])=>'<dt>0x'+esc(a)+'</dt><dd>'+esc(b)+'</dd>').join('')+'</dl>';
- const components=I.components||{};
- $('#capabilityList').innerHTML+='<dl class=tech>'+Object.entries(components).map(([name,v])=>'<dt>'+esc(name)+'</dt><dd>'+esc([v.model,v.product_code,v.firmware,v.serial].filter(Boolean).join(' · '))+'</dd>').join('')+'</dl>';
- $('#rideList').innerHTML=(H.rides||[]).slice(-10).reverse().map(x=>'<p>'+esc(new Date(x.end*1000).toLocaleString())+' · '+esc(x.km)+' km · '+esc(x.quality)+(x.battery_drop!=null?' · '+esc(x.battery_drop)+pick(' procentpunt accu',' battery percentage points'):'')+'</p>').join('')||'—';
- // Individual field ages, rather than a fresh timestamp on the whole card.
- $('#capabilityList').innerHTML+='<dl class=tech>'+Object.entries(r).map(([key,v])=>'<dt>'+esc(key)+'</dt><dd>'+esc(v.status)+' · '+esc(Math.round(v.age_seconds/60))+' min'+(v.stale?' · '+pick('verouderd','stale'):'')+'</dd>').join('')+'</dl>';
-}
+/* INSIGHT_LOGIC */
 
 async function refresh(){const s=await api('api/status');const L=s.last||{};const di=L.device_info||{};const dev=s.device||{};const R=L.range||{};
-  renderInsights(L.insights);
+  renderInsights(L.insights);applyMaintenancePreference(s.show_maintenance!==false);
   window._added=!s.bike_off&&!!(L.last_updated||L.frame_number||s.bike||s.locked);
   window._bikeAddr=s.bike||L.address||'';rt();
   if(window._added){
@@ -411,7 +375,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
       [t('b_cycles'),BO.battery_cycles!=null?BO.battery_cycles:'—'],
       [t('b_energy'),BO.battery_lifetime_wh!=null?(BO.battery_lifetime_wh/1000).toFixed(1)+' kWh':'—'],
       [t('b_motor'),BO.motor_hours!=null?BO.motor_hours+' h':'—'],
-      [t('b_service'),BO.next_service_km!=null?BO.next_service_km+' km':'—'],
+      ...(maintenanceVisible?[[t('b_service'),BO.next_service_km!=null?BO.next_service_km+' km':'—']]:[]),
       [t('b_sw'),BO.software_version||'—']];
     $('#boschStats').innerHTML=bs.map(([m,v])=>`<div><div class=m>${esc(m)}</div><div class=v>${esc(v)}</div></div>`).join('');
     $('#boschUpd').textContent=BO.ts?ago(BO.ts):'';}
@@ -565,3 +529,7 @@ async function refreshTracker(){const b=$('#trkBtn');b.disabled=true;b.textConte
 applyI18n();refresh();setInterval(refresh,5000);
 </script></body></html>"""
 
+
+INDEX_HTML = (INDEX_HTML.replace("<!-- INSIGHT_PANELS -->", INSIGHTS_HTML)
+              .replace("</style>", INSIGHTS_CSS + "</style>", 1)
+              .replace("/* INSIGHT_LOGIC */", INSIGHTS_SCRIPT))

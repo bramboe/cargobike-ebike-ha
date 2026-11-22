@@ -185,6 +185,7 @@ def _save_cfg() -> None:
             "bike": _bike_addr, "tracker": _tracker_mac,
             "tracker_off": _tracker_off, "alarm_off": _alarm_off,
             "bike_off": _bike_off, "sensors": _sensors,
+            "show_maintenance": _show_maintenance,
             "bike_model": _last.get("bike_model"),
             "bike_brand": _last.get("bike_brand"),
             "sku": _last.get("sku"),
@@ -277,6 +278,7 @@ def _resolve_product() -> None:
 
 
 _cfg0 = _load_cfg()
+_show_maintenance: bool = _cfg0.get("show_maintenance", True) is not False
 # Bike BLE address to lock onto ("" = auto-detect by name). /data wins over env.
 _bike_addr: "str | None" = (_cfg0.get("bike") or ADDRESS or "").strip() or None
 # Tracker fixed module MAC (from the advertisement) — robust against its rotating
@@ -2992,6 +2994,7 @@ async def _ui_status(_request):
     return web.json_response({"bike": _bike_addr, "locked": _locked_addr,
                               "tracker": _tracker_mac, "tracker_off": _tracker_off,
                               "alarm_off": _alarm_off,
+                              "show_maintenance": _show_maintenance,
                               "motion_test": _motion_test,
                               "bike_off": _bike_off,
                               "presence_alarm": _presence_alarm,
@@ -3016,6 +3019,16 @@ async def _ui_remove_bike(_request):
         _mqtt.publish(STATE_TOPIC, "", retain=True)
     log.info("UI: bike removed — reading paused until re-added")
     return web.json_response({"ok": True})
+
+
+async def _ui_preferences(request):
+    global _show_maintenance
+    data = await request.json()
+    if not isinstance(data, dict) or type(data.get("show_maintenance")) is not bool:
+        return web.json_response({"ok": False}, status=400)
+    _show_maintenance = data["show_maintenance"]
+    _save_cfg()
+    return web.json_response({"ok": True, "show_maintenance": _show_maintenance})
 
 
 async def _ui_set_alarm(request):
@@ -3290,6 +3303,7 @@ def make_app() -> "web.Application":
         web.get("/leaflet.css", static("/leaflet.css")),
         web.get("/tile/{z}/{x}/{y}", _ui_tile),
         web.get("/api/status", _ui_status),
+        web.post("/api/preferences", _ui_preferences),
         web.post("/api/scan", _ui_scan),
         web.post("/api/identify", _ui_identify),
         web.post("/api/select_bike", _ui_select_bike),

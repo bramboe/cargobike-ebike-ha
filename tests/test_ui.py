@@ -86,3 +86,114 @@ async def test_panel_escapes_untrusted_names(r, monkeypatch):
             await browser.close()
     finally:
         await runner.cleanup()
+
+
+
+async def test_interactive_insights_planning_filters_export_and_mobile(r, monkeypatch, tmp_path):
+    """Interactions stay read-only and survive automatic status refresh."""
+    import csv
+    import time
+    from aiohttp import web
+    from playwright.async_api import async_playwright
+
+    now = time.time()
+    r._last.update(last_updated=time.strftime('%Y-%m-%dT%H:%M:%S%z'), battery=80,
+                   insights={
+                       'local_battery_soh': 94, 'local_battery_voltage': None,
+                       'service_remaining_km': 200, 'km_per_ride': 10, 'rides_per_week': 5,
+                       'connection': {'state': 'reading_ok', 'age_seconds': 20},
+                       'receiver_health': 'ok',
+                       'readings': {'battery_soh': {'at': now, 'status': 'available'},
+                                    'battery_voltage': {'at': now, 'status': 'denied'}},
+                       'capabilities': {'00d8': 'available', '008c': 'denied'},
+                       'components': {'drive': {'model': XSS_CLOUD}},
+                       'forecast': {'forecast_status': 'estimated', 'service_days': 28,
+                                    'service_weeks': 4, 'history_days': 14,
+                                    'rides': [
+                                        {'end': now - 2 * 86400, 'km': 10, 'quality': 'inferred', 'battery_drop': 3},
+                                        {'end': now - 10 * 86400, 'km': 18, 'quality': 'interval', 'battery_drop': None},
+                                        {'end': now - 40 * 86400, 'km': 20, 'quality': 'inferred', 'battery_drop': 5},
+                                    ]},
+                   })
+    runner = web.AppRunner(r.make_app())
+    await runner.setup()
+    port = _free_port()
+    await web.TCPSite(runner, '127.0.0.1', port).start()
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            page = await browser.new_page(locale='en-GB', accept_downloads=True)
+            errors = []
+            page.on('pageerror', lambda err: errors.append(str(err)))
+            await page.goto(f'http://127.0.0.1:{port}/')
+            await page.wait_for_function("document.querySelector('.metric').textContent.includes('94')")
+            await page.locator('.metric').first.click()
+            assert 'not a capacity test' in await page.locator('#metricDetail').inner_text()
+            await page.get_by_role('tab', name='Maintenance', exact=True).click()
+            await page.locator('#scenarioHeading').click()
+            assert '28 days / 4 weeks' in await page.locator('#scenarioResult').inner_text()
+            await page.locator('#scenarioKm').fill('20')
+            assert '14 days / 2 weeks' in await page.locator('#scenarioResult').inner_text()
+            await page.evaluate('refresh()')
+            assert await page.locator('#scenarioKm').input_value() == '20'
+            assert await page.locator('#insight-tab-maintenance').get_attribute('aria-selected') == 'true'
+            assert r._last['insights']['forecast']['service_days'] == 28
+            await page.locator('#scenarioReset').click()
+            assert await page.locator('#scenarioKm').input_value() == '10'
+            await page.get_by_role('tab', name='Rides', exact=True).click()
+            assert await page.locator('#rideList tbody tr').count() == 2
+            await page.locator('#ridePeriod').select_option('7')
+            assert await page.locator('#rideList tbody tr').count() == 1
+            await page.locator('#rideKind').select_option('interval')
+            assert await page.locator('#rideExport').is_disabled()
+            await page.locator('#rideKind').select_option('all')
+            await page.locator('#ridePeriod').select_option('90')
+            assert await page.locator('#rideList tbody tr').count() == 3
+            assert await page.locator('#rideChart svg rect').count() == 3
+            async with page.expect_download() as download_info:
+                await page.locator('#rideExport').click()
+            download = await download_info.value
+            path = tmp_path / 'rides.csv'
+            await download.save_as(path)
+            with path.open(encoding='utf-8-sig', newline='') as f:
+                exported = list(csv.reader(f))
+            assert len(exported) == 4
+            assert exported[0][0] == 'observed_at'
+            await page.get_by_role('tab', name='Connection', exact=True).click()
+            await page.locator('#capabilityHeading').click()
+            await page.locator('#capabilitySearch').fill('denied')
+            assert await page.locator('#capabilityList dt').count() == 1
+            assert 'Pack voltage' in await page.locator('#capabilityList').inner_text()
+            await page.evaluate('refresh()')
+            assert await page.locator('#capabilitySearch').input_value() == 'denied'
+            assert await page.evaluate('window.__xss') is None
+            assert await page.locator('img[src=x]').count() == 0
+            assert 'Service approaching' in await page.locator('#serviceNotice').inner_text()
+            r._last['insights']['service_remaining_km'] = -25
+            await page.evaluate('refresh()')
+            assert '25 km beyond' in await page.locator('#maintenanceCallout').inner_text()
+            assert await page.locator('#planningKm').inner_text() == '0 km'
+            await page.get_by_role('button', name='Settings', exact=True).click()
+            await page.locator('#showMaintenance').uncheck()
+            await page.wait_for_function("document.querySelector('#maintenanceSaveStatus').textContent === 'Saved'")
+            assert r._show_maintenance is False
+            await page.reload()
+            await page.wait_for_function("document.querySelector('#insight-tab-battery').textContent === 'Battery'")
+            assert await page.locator('#maintenanceCard').is_hidden()
+            assert await page.locator('#insight-tab-maintenance').is_hidden()
+            await page.get_by_role('button', name='Settings', exact=True).click()
+            await page.locator('#showMaintenance').check()
+            await page.wait_for_function("document.querySelector('#maintenanceSaveStatus').textContent === 'Saved'")
+            assert r._load_cfg()['show_maintenance'] is True
+            await page.get_by_role('button', name='Dashboard', exact=True).click()
+            # Keyboard navigation and a narrow screen retain usable panels.
+            await page.locator('#insight-tab-connection').focus()
+            await page.keyboard.press('Home')
+            assert await page.locator('#insight-tab-battery').get_attribute('aria-selected') == 'true'
+            await page.set_viewport_size({'width': 390, 'height': 844})
+            await page.get_by_role('tab', name='Rides', exact=True).click()
+            assert await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            assert errors == []
+            await browser.close()
+    finally:
+        await runner.cleanup()

@@ -38,6 +38,7 @@ def r(monkeypatch, tmp_path):
                  "ACTIVITY_FILE", "_CHARGE_FILE", "ALARM_FILE", "INSIGHTS_FILE"):
         monkeypatch.setattr(reader, name, str(tmp_path / f"{name.lower()}.json"))
     monkeypatch.setattr(reader, "_mqtt", None)
+    monkeypatch.setattr(reader, "_show_maintenance", True)
     monkeypatch.setattr(reader, "_insights", None)
     monkeypatch.setattr(reader, "_receiver_fault", False)
     monkeypatch.setattr(reader, "_receiver_recovered_at", 0.0)
