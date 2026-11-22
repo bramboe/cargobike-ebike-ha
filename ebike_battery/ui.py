@@ -327,7 +327,7 @@ const fmtDist=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km';
 /* INSIGHT_LOGIC */
 
 async function refresh(){const s=await api('api/status');const L=s.last||{};const di=L.device_info||{};const dev=s.device||{};const R=L.range||{};
-  renderInsights(L.insights);applyMaintenancePreference(s.show_maintenance!==false);
+  renderInsights(L.insights,L.next_service);applyMaintenancePreference(s.show_maintenance!==false);
   window._added=!s.bike_off&&!!(L.last_updated||L.frame_number||s.bike||s.locked);
   window._bikeAddr=s.bike||L.address||'';rt();
   if(window._added){

@@ -186,6 +186,16 @@ async def test_interactive_insights_planning_filters_export_and_mobile(r, monkey
             await page.wait_for_function("document.querySelector('#maintenanceSaveStatus').textContent === 'Saved'")
             assert r._load_cfg()['show_maintenance'] is True
             await page.get_by_role('button', name='Dashboard', exact=True).click()
+            # Restored BLE mileage can be available before the insights history.
+            r._last['next_service'] = 177
+            r._last['insights'].pop('service_remaining_km')
+            r._last['insights']['forecast'] = {'forecast_status': 'insufficient_history'}
+            await page.evaluate('refresh()')
+            assert 'Service approaching' in await page.locator('#serviceNotice').inner_text()
+            assert await page.locator('#planningKm').inner_text() == '177 km'
+            assert 'Days/weeks not yet known' in await page.locator('#serviceForecast').inner_text()
+            assert 'Service timing not yet known' not in await page.locator('#maintenanceCard').inner_text()
+            assert 'Service approaching' in await page.locator('#maintenanceCallout').inner_text()
             # Keyboard navigation and a narrow screen retain usable panels.
             await page.locator('#insight-tab-connection').focus()
             await page.keyboard.press('Home')
