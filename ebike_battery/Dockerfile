@@ -16,7 +16,7 @@ RUN apk add --no-cache python3 py3-pip bluez ca-certificates \
        certifi==2026.7.22
 
 COPY run.sh /run.sh
-COPY bosch_mqtt_reader.py /bosch_mqtt_reader.py
+COPY *.py /
 COPY skus.json /skus.json
 COPY comp_init.txt /comp_init.txt
 COPY bike.png /bike.png
@@ -25,3 +25,4 @@ COPY leaflet.css /leaflet.css
 RUN chmod a+x /run.sh
 
 CMD [ "/run.sh" ]
+

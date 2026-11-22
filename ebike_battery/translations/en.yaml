@@ -1,15 +1,19 @@
 configuration:
-  bike_address:
-    name: Bike Bluetooth address
-    description: >-
-      BLE address of the Bosch hub (e.g. AA:BB:CC:11:22:33). Leave empty to
-      auto-detect, or pick the bike in the My eBike sidebar panel.
-  bike_model:
-    name: Bike name / brand
-    description: >-
-      Shown as the title in the panel. Leave empty to use the bike's reported
-      manufacturer (e.g. "Bosch eBike Systems"). The bike brand/model is not
-      broadcast over Bluetooth, so set your own here (e.g. "Urban Arrow").
+  ble_diagnostics:
+    name: Additional Bluetooth data
+    description: Read extra diagnostic fields over BLE. Denied fields remain unknown; USB is not required.
+  battery_temperature_low:
+    name: Battery temperature lower limit (°C)
+    description: Informational warning below this temperature.
+  battery_temperature_high:
+    name: Battery temperature upper limit (°C)
+    description: Informational warning above this temperature.
+  battery_voltage_low:
+    name: Battery voltage lower limit (V)
+    description: Informational warning below this pack voltage.
+  battery_voltage_high:
+    name: Battery voltage upper limit (V)
+    description: Informational warning above this pack voltage.
   cooldown:
     name: Read interval (seconds)
     description: Minimum seconds between battery reads while the bike is parked.
@@ -101,3 +105,4 @@ configuration:
   mqtt_pass:
     name: MQTT password
     description: Optional MQTT password (when not using the Mosquitto add-on).
+

@@ -199,3 +199,34 @@ def test_module_reports_log_only_changed_fields(p, caplog):
     assert lines[1] == 'PON module report: changed (armed) {"lastOnline": "t2"}'
     assert len(lines) == 2                          # no "unchanged" noise
     p._module_prev.clear()
+
+
+
+def test_presence_edge_during_exit_delay_is_evaluated_after_delay(p, monkeypatch):
+    p._sensors["exit_delay"] = 60
+    p._armed_at = T0
+    p._alarm["state"] = "armed_away"
+    monkeypatch.setattr(p, "PRESENCE_ALARM_GRACE", 45)
+    hear(p, T0)
+    p._presence_eval(T0)
+    monkeypatch.setattr(p.time, "time", lambda: T0 + 45)
+    p._presence_eval(T0 + 45)
+    assert p._pres["alarm_edge"] is False
+    assert p._alarm["state"] == "armed_away"
+    monkeypatch.setattr(p.time, "time", lambda: T0 + 70)
+    p._presence_eval(T0 + 70)
+    assert p._alarm["state"] == "triggered"
+
+
+def test_receiver_failure_is_not_bicycle_departure(p, monkeypatch):
+    p._alarm["state"] = "armed_away"
+    hear(p, T0)
+    p._presence_eval(T0)
+    monkeypatch.setattr(p, "_receiver_fault", True)
+    p._presence_eval(T0 + 700)
+    assert p._alarm["state"] == "armed_away"
+    assert p._pres["present"] is True
+    # A working proxy keeps the actual presence guard useful.
+    monkeypatch.setattr(p, "_proxy_alive_at", T0 + 699)
+    p._presence_eval(T0 + 700)
+    assert p._alarm["state"] == "triggered"

@@ -1,119 +1,146 @@
 # My eBike
 
-Reads a **Bosch Smart System** eBike (Kiox display, BRC3600 hub) over Bluetooth
-Low Energy and publishes it to Home Assistant via MQTT discovery. Tested on the
-**Urban Arrow Family Advanced Next**; other Bosch Smart System bikes are untested
-but may also work. A device appears with these entities:
+## Connection and setup
 
-- **Battery** — last measured battery percentage.
-- **Odometer** — total distance ridden (km), read from the bike itself.
-- **Next service in** — km remaining until the next service is due.
-- **Last updated** — when that reading was taken.
-- **Ride mode** — the assist mode selected on the bike (Eco / Tour / Auto /
-  Turbo / Off), captured from the bike's push channel during the read. Shows
-  the last known mode between rides.
-- **Range Eco / Tour+ / Auto / Turbo** — the bike's estimated remaining range
-  (km) per assist mode, as the eBike Flow app shows it. Recalculated by the
-  bike from riding style and charge.
-- **Status** — what the add-on is doing right now: searching, *"Not paired —
-  put the bike in PAIRING MODE"*, *"Connected to … — reading"*, or
-  *"Battery NN% read at …"*.
-- **Motion** — on while the COMODULE (URBANARROW) tracker reports the bike is
-  being moved, even with the eBike switched off. The add-on stays connected to
-  the always-on tracker; great for anti-theft automations / an alarm. Clears
-  after `motion_off_delay` seconds of stillness.
-- **Alarm** — an `alarm_control_panel` (exposed to Apple HomeKit as a **Security
-  System**). Arm it (away/home/night) from HomeKit or Home Assistant; sustained
-  movement while armed sets it to **triggered**. Disarm to clear.
-- **Awake** — on when the bike is advertising (on / in range), off otherwise.
-- **Bluetooth address** — which BLE device was selected (diagnostic).
+The add-on reads a Bosch Smart System bike through a bonded BlueZ Bluetooth
+connection and publishes MQTT discovery entities. Tested development hardware:
+Urban Arrow with BRC3600 LED Remote; other Smart System models are unverified.
+No permanent USB connection is required or used by this runtime.
 
-## Requirements
+Use Home Assistant hardware with a working local Bluetooth adapter, or pass one
+through to its VM. Install an MQTT broker. Open the My eBike panel, scan, select
+the intended bike, enable pairing mode on the bike and press Pair. Selection is
+stored by the panel: the former `bike_address` add-on option is no longer used.
+The phone's Flow app can occupy the bike's BLE connection; let it disconnect if
+reads fail. The ESPHome proxy listens for tracker presence only, not bike data.
 
-- Home Assistant on hardware with a **working Bluetooth adapter** (e.g. HA OS
-  on a Raspberry Pi or a bare-metal mini-PC). It does **not** work if HA runs
-  in a VM without a passed-through Bluetooth adapter — in that case run the
-  standalone reader from `tools/` on a Linux host instead.
-- The **Mosquitto broker** add-on (or set the `mqtt_*` options manually).
-- The bike's BLE address (the hub advertises as `smart system eBike`).
+## Existing entities
 
-## Why not a normal (HACS) integration?
+Battery %, last updated, Bluetooth address, odometer, distance to service, ride
+mode and estimated range per mode keep their existing MQTT unique IDs and topics.
+Historical readings remain visible when the bike is off. This is not evidence
+that the bike is currently connected: consult Reader connection and reading age.
 
-The Bosch hub only serves its telemetry over an **encrypted, bonded** BLE link.
-Home Assistant's Bluetooth stack (local adapter or ESP proxies) cannot create
-that bond, so a regular integration cannot read it. This add-on uses the host's
-BlueZ stack directly, which can bond and read.
+Cloud diagnostic sensor IDs also remain unchanged. New local fields have
+separate `local_*` IDs and names ending in `(BLE)`, so a BMS health estimate is
+not confused with a dealer capacity test. PON GPS data is optional and separate.
 
-## Setup
+## BLE enrichment and component information
 
-1. Put the bike in **pairing mode** (display → connect a new device) and
-   **start the add-on**. By default `bike_address` is empty, so the add-on
-   **auto-detects** the hub by its name (`smart system eBike`), pairs it
-   automatically (code-free "Just Works" pairing) and trusts the bond — you
-   only do this once.
-2. After that, whenever the bike is on and in range, the battery is read and
-   updated in Home Assistant. The last reading stays shown until the next one
-   (it never goes "unavailable").
+`ble_diagnostics` defaults to true and adds a bounded, best-effort read phase to
+the existing BLE session. Supported fields include BMS state of health, full
+charge cycles, pack voltage, battery/motor PCB temperature, remaining energy and
+component model/serial/firmware. Each field has its own timestamp and capability
+status. Explicit denial clears its displayed value; an old reading cannot look
+fresh merely because a different field succeeded. Values expire after 24 hours.
+DENIED/UNSUPPORTED/NO_ROUTE responses back off for six hours; reconnecting the
+same bike does not hammer a protected field. Selecting another bike resets this
+capability cache. Timeouts have a bounded three-attempt-per-session stop.
 
-The selected device's BLE address is published as a diagnostic sensor
-**Bluetooth address**, so you can see which bike was picked. If more than one
-"smart system eBike" is in range (e.g. a neighbour), the add-on log lists each
-candidate with its signal strength — set **bike_address** to the right one to
-pin it.
+The extra fields are protocol research, **not yet hardware-validated over BLE on
+the development bike**. A successful USB read is not proof of BLE access. Unreadable
+fields stay unknown; there is no USB/cloud fallback masquerading as BLE. Existing
+battery/odometer/range reads continue even if enrichment fails or is disabled.
 
-## Sensors & anti-theft
+Component changes are recorded when a new serial or firmware is read. A new
+battery does not inherit the old pack's measurements. Software versions include
+20.x.x as well as 19.x.x. Changing the selected bike clears its old retained data,
+identity and history without changing the HA entity unique IDs.
 
-The **Settings → Sensoren** card is a single, unified list of every source that can
-report movement or theft. Each row is enabled/disabled individually and shares the
-same options:
+## Ride history and time to service
 
-- **Built-in sources** (pre-filled): *Tracker motion* (Bluetooth motion frames from
-  the COMODULE tracker) and *Tracker presence* (trips when the bike leaves BLE
-  range). Disabling *Tracker motion* also lets the add-on stop holding the BLE
-  connection while armed, which **saves the module battery**.
-- **External sensors**: add any number of your own Home Assistant `binary_sensor`s
-  (contact, vibration, motion…) that you mount on the bike. Fully independent of
-  Bluetooth.
+Mileage samples and inferred rides are stored in the add-on's persistent data.
+An inferred ride ends after 15 minutes without a newly observed distance change.
+A long gap is labelled a **measurement interval**: it can contain multiple rides,
+so the app does not claim exact start/stop times or an exact ride count.
 
-Per-sensor options:
+Forecasts need at least seven calendar days, three observed rides/intervals and
+positive mileage. The rolling window is up to 28 days and includes days not ridden:
 
-| Option | Meaning |
-|---|---|
-| **Role** | *Alarm* trips the alarm; *Motion only* shows on the dashboard but never trips. |
-| **Silent / Full alarm** | Which armed modes the sensor is active in. |
-| **Always on** | Triggers even when the alarm is disarmed (e.g. a tamper/vibration sensor). |
-| **Unavailable = tamper** (external) | An `unavailable` entity counts as active — catches a yanked-off or dead sensor. |
-| **Invert** (external) | Flip the on/off logic for sensors that report the opposite. |
-| **Double-check** (external) | The alarm only trips when **two** double-check sensors confirm together within the shared window — a backup-sensor / false-alarm guard. |
+- km/day = observed distance / elapsed calendar days;
+- days to service = remaining service km / km/day;
+- weeks = days / 7;
+- rides/intervals remaining = remaining km / mean observed ride/interval distance.
 
-Global **entry delay** (grace before a trip actually fires — time to disarm) and
-**exit delay** (ignore trips right after arming — time to ride away) apply to all
-sensors.
+For example, 10 km per ride at five rides/week gives about 50 km/week. A 200 km
+service interval would then take about four weeks, rather than twenty days
+regardless of riding frequency. Forecasts are estimates: incomplete BLE coverage
+can merge rides, and changing usage changes the prediction. The panel labels
+this uncertainty. History older than seven days without a new observation is
+stale; insufficient/stale data yields an unknown estimate. Overdue service is
+zero days. No forecast is seeded from the one-off USB research scan.
 
-> Power user (route B): the motion, presence and alarm entities are published over
-> MQTT, so you can instead point [Alarmo](https://github.com/nielsfaber/alarmo) at
-> them and use its full alarm panel (user codes, areas, notification actions).
+Per-ride battery consumption is in **percentage points** and percentage points/km,
+not an invented Wh/km conversion. A charging increase invalidates consumption
+for that interval. Odometer rollbacks, impossible jumps and out-of-order samples
+are rejected. A new selected bike starts new history.
 
-## Options
+The Service due soon binary sensor activates at 200 km remaining. Days/weeks,
+forecast diagnostics, mean observed ride distance and frequency are available as
+MQTT entities for notifications. The forecast sensor attributes include the
+method, sample duration, ride quality and recent history. Configure HA
+notifications/automations using these entities; the add-on sends no messages or
+controls charging sockets by itself.
 
-| Option | Description |
-|---|---|
-| `bike_address` | BLE address of the Bosch hub, e.g. `AA:BB:CC:11:22:33` |
-| `cooldown` | Minimum seconds between reads while parked (default 120) |
-| `mqtt_host` / `mqtt_port` / `mqtt_user` / `mqtt_pass` | Optional MQTT override. Leave empty to use the Mosquitto add-on automatically. |
+## Voltage and temperature warnings
 
-## Notes
+Options (editable in add-on configuration):
 
-- The bike allows **one** BLE connection at a time. If the eBike Flow / Urban
-  Arrow phone app is connected, the add-on cannot read until the phone
-  disconnects (e.g. you walk away with the phone).
-- The bond survives reboots; no re-pairing needed unless the bike is fully
-  power-cycled at the battery.
+| Option | Default | Meaning |
+|---|---:|---|
+| `ble_diagnostics` | true | Additional allowlisted BLE READ requests |
+| `battery_temperature_low` | 0 | Warning below this measured temperature, °C |
+| `battery_temperature_high` | 50 | Warning above this measured temperature, °C |
+| `battery_voltage_low` | 30 | Warning below this pack voltage, V |
+| `battery_voltage_high` | 43.5 | Warning above this pack voltage, V |
+| `cooldown` | 120 | Minimum seconds between successful bike reads |
+| `mqtt_host/port/user/pass` | automatic | Optional broker override |
 
-## Disclaimer
+Warning thresholds are configurable informational limits, not a charger safety
+system. Use limits appropriate for the actual pack. The warnings stay unknown if
+BLE denies the underlying measurement. Automatic charging control is not included:
+charger-connected/charging-active decoding needs live validation first.
 
-This is an **unofficial, community-made** integration. It is **not affiliated
-with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow**. Bosch,
-Kiox, Smart System and Urban Arrow are trademarks of their respective owners.
-Use is **entirely at your own risk** and without any warranty — the author is
-not liable for any damage to your bike, battery, tracker, or data.
+## Presence and alarm
+
+The COMODULE/URBANARROW tracker is listened for passively; a permanent connection
+for tracker motion was removed in 2.67. Tracker presence disappearing can trip an
+armed alarm. The built-in BLE source is presence, not motion. External Home
+Assistant contact/vibration/motion binary sensors can also be configured.
+
+Per source: enabled, alarm/motion role, armed modes, always-on, invert,
+unavailable-as-tamper and optional confirmation groups. Entry and exit delays
+are configurable in the panel. An absence detected during exit delay remains
+eligible after the delay ends. A pending alarm restored after restart becomes
+triggered, rather than silently disarming; local alarm state is persisted too.
+
+Receiver scan errors hold the last presence state and publish a separate receiver
+problem diagnostic, rather than asserting bicycle theft. A healthy configured
+proxy can keep the guard working. After receiver recovery there is a new grace
+period. Loss of a receiver means reduced protection: use the receiver-problem
+entity for an HA notification. This is not a certified security system.
+
+`presence_alarm_seconds` is the unheard threshold while armed; compare it with
+Longest silence while armed. `comodule_address`, `motion_off_delay`, optional
+`ble_proxy_host/port/key` and the existing cloud options remain supported.
+
+## Standalone use and code structure
+
+`tools/bosch_mqtt_reader.py` delegates to the add-on reader so the standalone
+entry point cannot diverge. Run it from a checkout with the dependencies in
+`requirements_test.txt` (or the runtime versions from Dockerfile). On Linux,
+use BlueZ, a broker, and writable `/data`; the supplied systemd service is an
+example whose paths and broker settings must be edited.
+
+Runtime orchestration lives in `bosch_mqtt_reader.py`; pure legacy decoders in
+`telemetry.py`; bounded BLE READ enrichment in `ble_diagnostics.py`; explicit
+address/decoding definitions in `diagnostics.py`; history/forecasts in
+`history.py`; persisted derived data in `insights.py`; new discovery payloads in
+`mqtt_insights.py`; alarm restart semantics in `alarm_state.py`; cloud parsing
+in `cloud.py`; ingress HTML/JavaScript in `ui.py`.
+
+BES3 address/scaling facts are attributed to
+[rweijnen/bosch-bes3-reader](https://github.com/rweijnen/bosch-bes3-reader/tree/cd9a5510ae1091c467d8d5a586a23723c17a9249),
+CC BY 4.0. The implementation adds no bike setting writes, RPCs or firmware tools.
+
+This is unofficial community software, not affiliated with Bosch or Urban Arrow.

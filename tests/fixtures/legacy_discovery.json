@@ -1,0 +1,224 @@
+[
+  {
+    "topic": "homeassistant/sensor/urban_arrow/battery/config",
+    "unique_id": "urban_arrow_battery",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/last_updated/config",
+    "unique_id": "urban_arrow_last_updated",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/address/config",
+    "unique_id": "urban_arrow_address",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/frame_number/config",
+    "unique_id": "urban_arrow_frame_number",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/lock_label/config",
+    "unique_id": "urban_arrow_lock_label",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/part_number/config",
+    "unique_id": "urban_arrow_part_number",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/hub_firmware/config",
+    "unique_id": "urban_arrow_hub_firmware",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/module_firmware/config",
+    "unique_id": "urban_arrow_module_firmware",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/odometer/config",
+    "unique_id": "urban_arrow_odometer",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/next_service/config",
+    "unique_id": "urban_arrow_next_service",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/max_torque/config",
+    "unique_id": "urban_arrow_max_torque",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/max_power/config",
+    "unique_id": "urban_arrow_max_power",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/speed_limit/config",
+    "unique_id": "urban_arrow_speed_limit",
+    "state_topic": "urban_arrow/state",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/mode/config",
+    "unique_id": "urban_arrow_mode",
+    "state_topic": "urban_arrow/mode",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/range_eco/config",
+    "unique_id": "urban_arrow_range_eco",
+    "state_topic": "urban_arrow/range",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/range_tour/config",
+    "unique_id": "urban_arrow_range_tour",
+    "state_topic": "urban_arrow/range",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/range_auto/config",
+    "unique_id": "urban_arrow_range_auto",
+    "state_topic": "urban_arrow/range",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/range_turbo/config",
+    "unique_id": "urban_arrow_range_turbo",
+    "state_topic": "urban_arrow/range",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/battery_soh/config",
+    "unique_id": "urban_arrow_battery_soh",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/battery_cycles/config",
+    "unique_id": "urban_arrow_battery_cycles",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/battery_lifetime_wh/config",
+    "unique_id": "urban_arrow_battery_lifetime_wh",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/battery_model/config",
+    "unique_id": "urban_arrow_battery_model",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/motor_hours/config",
+    "unique_id": "urban_arrow_motor_hours",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/power_on_hours/config",
+    "unique_id": "urban_arrow_power_on_hours",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/last_software_update/config",
+    "unique_id": "urban_arrow_last_software_update",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/software_version/config",
+    "unique_id": "urban_arrow_software_version",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/capacity_tested_wh/config",
+    "unique_id": "urban_arrow_capacity_tested_wh",
+    "state_topic": "urban_arrow/bosch",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/presence_gap/config",
+    "unique_id": "urban_arrow_presence_gap",
+    "state_topic": "urban_arrow/presence_gap",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/last_activity/config",
+    "unique_id": "urban_arrow_last_activity",
+    "state_topic": "urban_arrow/activity",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/alarm_control_panel/urban_arrow/alarm/config",
+    "unique_id": "urban_arrow_alarm",
+    "state_topic": "urban_arrow/alarm/state",
+    "command_topic": "urban_arrow/alarm/cmd"
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/status/config",
+    "unique_id": "urban_arrow_status",
+    "state_topic": "urban_arrow/status",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/binary_sensor/urban_arrow/motion/config",
+    "unique_id": "urban_arrow_motion",
+    "state_topic": "urban_arrow/motion",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/binary_sensor/urban_arrow/present/config",
+    "unique_id": "urban_arrow_present",
+    "state_topic": "urban_arrow/present",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/binary_sensor/urban_arrow/main_battery/config",
+    "unique_id": "urban_arrow_main_battery",
+    "state_topic": "urban_arrow/main_battery",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/sensor/urban_arrow/tracker_battery/config",
+    "unique_id": "urban_arrow_tracker_battery",
+    "state_topic": "urban_arrow/tracker",
+    "command_topic": null
+  },
+  {
+    "topic": "homeassistant/button/urban_arrow/tracker_refresh/config",
+    "unique_id": "urban_arrow_tracker_refresh",
+    "state_topic": null,
+    "command_topic": "urban_arrow/tracker/refresh"
+  },
+  {
+    "topic": "homeassistant/binary_sensor/urban_arrow/awake/config",
+    "unique_id": "urban_arrow_awake",
+    "state_topic": "urban_arrow/status",
+    "command_topic": null
+  }
+]

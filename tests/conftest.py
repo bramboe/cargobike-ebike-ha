@@ -35,9 +35,16 @@ class FakeMqtt:
 def r(monkeypatch, tmp_path):
     """The reader module with files in tmp_path and all mutable state reset."""
     for name in ("DATA_FILE", "LAST_FILE", "PON_FILE", "BOSCH_FILE",
-                 "ACTIVITY_FILE", "_CHARGE_FILE"):
+                 "ACTIVITY_FILE", "_CHARGE_FILE", "ALARM_FILE", "INSIGHTS_FILE"):
         monkeypatch.setattr(reader, name, str(tmp_path / f"{name.lower()}.json"))
     monkeypatch.setattr(reader, "_mqtt", None)
+    monkeypatch.setattr(reader, "_insights", None)
+    monkeypatch.setattr(reader, "_receiver_fault", False)
+    monkeypatch.setattr(reader, "_receiver_recovered_at", 0.0)
+    monkeypatch.setattr(reader, "_proxy_alive_at", 0.0)
+    monkeypatch.setattr(reader, "_bike_generation", 0)
+    from ble_diagnostics import DiagnosticReader
+    monkeypatch.setattr(reader, "_ble_diagnostics", DiagnosticReader())
     monkeypatch.setattr(reader, "_mqtt_up", threading.Event())
     monkeypatch.setattr(reader, "_alarm",
                         {"state": "disarmed", "restored": False, "fired": False})
@@ -63,3 +70,4 @@ def fake_mqtt(r, monkeypatch) -> FakeMqtt:
     fake = FakeMqtt()
     monkeypatch.setattr(r, "_mqtt", fake)
     return fake
+
