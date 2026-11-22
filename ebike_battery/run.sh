@@ -7,6 +7,13 @@ export BIKE_ADDRESS=""
 export BIKE_MODEL=""
 export COOLDOWN="$(bashio::config 'cooldown')"
 
+# BLE enrichment is best-effort; never requires USB or a cloud account.
+if bashio::config.false 'ble_diagnostics'; then export BLE_DIAGNOSTICS=0; else export BLE_DIAGNOSTICS=1; fi
+export BATTERY_TEMPERATURE_LOW="$(bashio::config 'battery_temperature_low')"
+export BATTERY_TEMPERATURE_HIGH="$(bashio::config 'battery_temperature_high')"
+export BATTERY_VOLTAGE_LOW="$(bashio::config 'battery_voltage_low')"
+export BATTERY_VOLTAGE_HIGH="$(bashio::config 'battery_voltage_high')"
+
 # Optional remote ESPHome Bluetooth proxy for the presence layer.
 export BLE_PROXY_HOST="$(bashio::config 'ble_proxy_host')"
 export BLE_PROXY_PORT="$(bashio::config 'ble_proxy_port')"
@@ -55,3 +62,4 @@ if bashio::config.true 'motion_test'; then export MOTION_TEST=1; else export MOT
 
 bashio::log.info "Starting Urban Arrow battery reader (${BIKE_ADDRESS:-auto-detect})"
 exec python3 /bosch_mqtt_reader.py
+

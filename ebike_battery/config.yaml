@@ -1,5 +1,5 @@
 name: My eBike
-version: "2.67.1"
+version: "2.68.0"
 slug: ebike_battery
 description: >-
   Reads any Bosch Smart System e-bike with a Kiox 300 display over Bluetooth —
@@ -25,6 +25,11 @@ homeassistant_api: true
 services:
   - mqtt:want
 options:
+  ble_diagnostics: true
+  battery_temperature_low: 0
+  battery_temperature_high: 50
+  battery_voltage_low: 30
+  battery_voltage_high: 43.5
   cooldown: 120
   comodule_address: ""
   motion_off_delay: 12
@@ -45,6 +50,11 @@ options:
   mqtt_user: ""
   mqtt_pass: ""
 schema:
+  ble_diagnostics: bool?
+  battery_temperature_low: float(-50,100)?
+  battery_temperature_high: float(-50,100)?
+  battery_voltage_low: float(0,70)?
+  battery_voltage_high: float(0,70)?
   # The bike is added via the panel GUI (scan → add), not here. Its selection and
   # name are stored by the add-on; there is no bike address/name option anymore.
   cooldown: int
@@ -85,3 +95,4 @@ schema:
   mqtt_port: int?
   mqtt_user: str?
   mqtt_pass: str?
+

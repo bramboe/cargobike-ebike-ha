@@ -1,67 +1,43 @@
-# Bosch Smart System (Kiox 300) → Home Assistant
+# My eBike — Bosch Smart System → Home Assistant
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/bramboe?frequency=one-time) [![Sponsor bunq.me](https://img.shields.io/badge/Sponsor-bunq.me-2E9AD0)](https://bunq.me/bramboe)
 
-Get the battery percentage of a **Bosch Smart System** e-bike — any bike with a
-**Kiox 300** display (Smart System hub, BRC3600) — into Home Assistant. The
-battery is only served over an **encrypted, bonded** BLE link, which Home
-Assistant's own Bluetooth stack (local adapter or ESP proxies) cannot establish
-— so this uses a small reader that bonds with the bike via BlueZ and publishes
-the battery to MQTT.
+Home Assistant add-on for Bosch Smart System bikes, developed on an Urban Arrow.
+A bonded local Bluetooth connection reads the bike and publishes retained MQTT
+entities. The bike can stay outside: **normal operation needs no USB cable and no
+cloud account**. The bike must be awake and within Bluetooth range for a fresh
+reading. Last-known readings remain visible with their timestamps.
 
-The bike appears in HA as a device (named after the bike's own brand, read over
-BLE) with a **Battery** sensor and a **Last updated** timestamp. The last reading
-stays shown until the next one (never "unavailable").
+## Features
 
-Developed and tested on an Urban Arrow cargo bike; other Kiox 300 / Smart System
-bikes should work the same way.
+- Existing battery, odometer, service distance, ride mode and per-mode range.
+- Best-effort BLE diagnostic reads for battery health, charge cycles, voltage,
+  temperature, remaining energy and component identification/firmware.
+- Persistent mileage and inferred ride/measurement-interval history, including
+  battery percentage-point consumption when both endpoints are usable.
+- Maintenance estimate in **days, weeks and observed rides/intervals**, using up
+  to 28 calendar days of mileage history, including rest days.
+- Connection and receiver diagnostics, field-by-field BLE capability and age.
+- Passive tracker presence, external HA sensors and an optional alarm panel.
+- Optional PON location and Bosch cloud diagnostics; existing IDs are preserved.
 
-## Option A — Home Assistant Add-on (recommended)
+**BLE capability differs by firmware and access level.** Rich battery fields were
+observed over USB during protocol research; that does not prove they are readable
+over BLE on every bike. The add-on requests only allowlisted READs and marks
+DENIED/UNSUPPORTED/NO_ROUTE fields unavailable. It never imports old USB readings
+as live bike data, changes bike settings or updates firmware.
 
-For Home Assistant running on hardware with a **working Bluetooth adapter**
-(e.g. HA OS on a Raspberry Pi or bare-metal mini-PC).
+## Install
 
-1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories** and add:
-   `https://github.com/bramboe/cargobike-ebike-ha`
-2. Install **My eBike**.
-3. Set `bike_address` in its *Configuration* tab (find it with
-   `bluetoothctl scan on` → `smart system eBike`).
-4. Put the bike in **pairing mode** and **start the add-on** — it pairs
-   automatically (code-free "Just Works") and reads the battery from then on.
+1. Add `https://github.com/bramboe/cargobike-ebike-ha` under Home Assistant's
+   add-on/app repositories and install **My eBike**.
+2. Install/configure an MQTT broker, such as the Mosquitto add-on.
+3. Open the My eBike panel, scan for the bike and select it.
+4. Put the bike in pairing mode and use **Pair** in the panel.
 
-See [`ebike_battery/DOCS.md`](ebike_battery/DOCS.md) for details.
+A local Bluetooth adapter with BlueZ is needed for the encrypted bond. The
+optional ESPHome proxy extends **tracker presence only**; it does not replace the
+bonded local bike-data connection. Only one bike is active per add-on instance.
 
-## Option B — Standalone reader
-
-For setups where Home Assistant has **no local Bluetooth** (e.g. HA OS in a VM).
-Run the reader on any nearby Linux host that has Bluetooth (for example the
-Proxmox/hypervisor host). See [`tools/`](tools/):
-
-- `bosch_mqtt_reader.py` — the reader (battery → MQTT discovery).
-- `bosch-bike-reader.service` — a systemd unit.
-- `bosch_test_read.py` — one-shot read to verify a bonded link.
-
-Pair once with `bluetoothctl` (the bike uses Just Works — no code), `trust` it,
-then run the reader. The on-disk bond survives reboots.
-
-## How it works
-
-- Connects to the Bosch hub (`smart system eBike`) over BLE using the host's
-  bonded link.
-- Reads characteristic `0000eb21-eaa2-11e9-81b4-2a2ae2dbcce4` (a protobuf
-  telemetry snapshot) and decodes field 10 = battery %.
-- Publishes battery + a timestamp to MQTT with Home Assistant discovery.
-
-## Limitations
-
-- The bike allows **one** BLE connection at a time — the phone app and this
-  reader cannot both be connected.
-- Battery only for now. The odometer, assist mode (Eco/Tour+/Auto/Turbo) and the
-  COMODULE motion sensor are still being reverse-engineered.
-
-## Disclaimer
-
-This is an **unofficial, community-made** integration. It is **not affiliated
-with, endorsed by, or supported by Bosch eBike Systems or Urban Arrow**. Bosch,
-Kiox, Smart System and Urban Arrow are trademarks of their respective owners.
-Use is **entirely at your own risk** and without any warranty.
+See [the detailed guide](ebike_battery/DOCS.md) for configuration, limitations,
+history quality and suggested Home Assistant notifications.

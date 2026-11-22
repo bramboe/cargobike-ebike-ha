@@ -1,16 +1,19 @@
 configuration:
-  bike_address:
-    name: Bluetooth-adres fiets
-    description: >-
-      BLE-adres van de Bosch-hub (bijv. AA:BB:CC:11:22:33). Leeg laten om
-      automatisch te detecteren, of kies de fiets in het My eBike-paneel.
-  bike_model:
-    name: Fietsnaam / merk
-    description: >-
-      Wordt als titel in het paneel getoond. Leeg laten om de door de fiets
-      gerapporteerde fabrikant te gebruiken (bijv. "Bosch eBike Systems"). Het
-      fietsmerk/-model wordt niet via Bluetooth verzonden, dus geef hier
-      desgewenst je eigen naam op (bijv. "Urban Arrow").
+  ble_diagnostics:
+    name: Extra Bluetooth-gegevens
+    description: Lees extra diagnosevelden via BLE. Geweigerde velden blijven onbekend; USB is niet nodig.
+  battery_temperature_low:
+    name: Accutemperatuur ondergrens (°C)
+    description: Informatieve waarschuwing onder deze temperatuur.
+  battery_temperature_high:
+    name: Accutemperatuur bovengrens (°C)
+    description: Informatieve waarschuwing boven deze temperatuur.
+  battery_voltage_low:
+    name: Accuspanning ondergrens (V)
+    description: Informatieve waarschuwing onder deze packspanning.
+  battery_voltage_high:
+    name: Accuspanning bovengrens (V)
+    description: Informatieve waarschuwing boven deze packspanning.
   cooldown:
     name: Leesinterval (seconden)
     description: Minimaal aantal seconden tussen batterij-uitlezingen terwijl de fiets geparkeerd staat.
@@ -103,3 +106,4 @@ configuration:
   mqtt_pass:
     name: MQTT-wachtwoord
     description: Optioneel MQTT-wachtwoord (als je niet de Mosquitto add-on gebruikt).
+

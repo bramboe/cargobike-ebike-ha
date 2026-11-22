@@ -1,3 +1,13 @@
+# 2.68.0
+
+- BLE-first diagnostic READ enrichment, per-field capability/age and battery warnings; no USB requirement.
+- Persistent mileage, inferred rides/intervals, battery consumption and estimated days/weeks/rides to service.
+- Preserve existing MQTT IDs/topics; add separate BLE sensors and reader/receiver diagnostics.
+- Preserve pending alarms across restart; retain presence edges through exit delay and distinguish failed receivers.
+- Clear old bike identity/history on selection changes; prevent unrelated cloud-battery measurements.
+- Separate telemetry, BLE diagnostics, history, cloud parsing, discovery and UI modules; unify standalone entry point.
+- Document inaccessible BLE fields and history quality; hardware BLE validation remains required.
+
 # Changelog
 
 ## 2.67.1 — no more writes to the bike when connecting
@@ -125,3 +135,4 @@ movement.
 **Quieter logs**
 - Hourly "Bosch cloud"/"theft log" lines only when something changes; timeouts
   now say what happened instead of an empty message.
+
