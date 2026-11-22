@@ -1,3 +1,11 @@
+# 2.68.1
+
+- Replace the static insight list with interactive Battery, Maintenance, Rides and Connection panels.
+- Click readings for source/timestamp, explore service planning without modifying history, filter/chart rides and export CSV.
+- Keep tab/filter/planning state during automatic refresh; add keyboard navigation and mobile layouts.
+
+- Add clear maintenance planning reminders and a persistent Settings → Display → Show maintenance toggle.
+
 # 2.68.0
 
 - BLE-first diagnostic READ enrichment, per-field capability/age and battery warnings; no USB requirement.
