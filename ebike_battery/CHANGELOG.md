@@ -1,3 +1,8 @@
+# 2.68.2
+
+- Use the restored BLE service distance for maintenance reminders when insight history is not ready yet.
+- Distinguish known distance to service from an unavailable days/weeks estimate.
+
 # 2.68.1
 
 - Replace the static insight list with interactive Battery, Maintenance, Rides and Connection panels.
