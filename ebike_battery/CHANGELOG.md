@@ -1,3 +1,7 @@
+# 2.68.4
+
+- Show the odometer as whole kilometres.
+
 # 2.68.3
 
 - Show the distance to service as whole kilometres and drop the Bluetooth icon from the Maintenance card.

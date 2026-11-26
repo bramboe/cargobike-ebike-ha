@@ -353,7 +353,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   const rsum=order.reduce((a,[k])=>a+(R[k]||0),0)||1;
   $('#rangeBar').innerHTML=order.map(([k,n])=>`<i style="width:${(R[k]||0)/rsum*100}%;background:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#999'}"></i>`).join('');
   $('#service').textContent=L.next_service!=null?Math.round(L.next_service)+' km':'—';
-  $('#odo').textContent=L.odometer!=null?L.odometer.toLocaleString('nl-NL')+' km':'—';
+  $('#odo').textContent=L.odometer!=null?Math.round(L.odometer).toLocaleString('nl-NL')+' km':'—';
   // technical info — Kiox (Bosch hub) vs GPS module, separate devices/MACs
   const dl=rows=>{const r=rows.filter(([k,v])=>v!=null&&v!=='');return r.length
     ?'<dl class=tech>'+r.map(([k,v])=>`<dt>${t(k)}</dt><dd>${v&&v.html?v.html:esc(v)}</dd>`).join('')+'</dl>'
