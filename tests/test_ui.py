@@ -127,7 +127,7 @@ async def test_interactive_insights_planning_filters_export_and_mobile(r, monkey
             page.on('pageerror', lambda err: errors.append(str(err)))
             await page.goto(f'http://127.0.0.1:{port}/')
             await page.wait_for_function("document.querySelector('.metric').textContent.includes('94')")
-            assert 'Recently read' in await page.locator('#conn').inner_text()
+            assert 'recently read' in (await page.locator('#conn').inner_text()).lower()
             assert await page.locator('#refreshError').is_hidden()
             assert 'Measurement time unknown' in await page.locator('#modeAge').inner_text()
             r._last['tracker_battery'] = 70
