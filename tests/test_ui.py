@@ -164,6 +164,9 @@ async def test_interactive_insights_planning_filters_export_and_mobile(r, monkey
             assert await page.locator('#scenarioKm').input_value() == '10'
             await page.get_by_role('tab', name='Rides', exact=True).click()
             assert await page.locator('#rideList tbody tr').count() == 2
+            await page.locator('#rideChart rect').last.focus()
+            await page.keyboard.press('Enter')
+            assert await page.locator('#rideDetail').is_visible()
             await page.locator('#rideList .ride-select').first.click()
             assert '10 km' in await page.locator('#rideDetail').inner_text()
             await page.evaluate('refresh()')

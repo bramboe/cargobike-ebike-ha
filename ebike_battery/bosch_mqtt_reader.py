@@ -38,6 +38,7 @@ from bleak import BleakClient, BleakScanner
 
 from alarm_state import restore_state
 from ble_diagnostics import DiagnosticReader
+from history import number
 from insights import Insights
 from mqtt_insights import publish as publish_insights_discovery
 from telemetry import (_pb_fields as _pb_fields, parse_eb21 as parse_eb21,
@@ -732,11 +733,20 @@ def _ensure_insights():
     return _insights
 
 
+def _insight_snapshot():
+    # A restored BLE service distance remains useful even before the first new
+    # read after an upgrade. Do not mark it fresh or manufacture ride history.
+    if _insights.remaining is None:
+        _insights.remaining = number(_last.get("next_service"))
+    snapshot = _insights.snapshot()
+    snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+    return snapshot
+
+
 def _publish_insights():
     if _insights is None:
         return
-    snapshot = _insights.snapshot()
-    snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+    snapshot = _insight_snapshot()
     _last["insights"] = snapshot
     if _mqtt is not None:
         _mqtt.publish(INSIGHTS_TOPIC, json.dumps(snapshot), retain=True)
@@ -2997,8 +3007,7 @@ def _log_module_report(entry: dict) -> None:
 
 async def _ui_status(_request):
     if _insights is not None:
-        snapshot = _insights.snapshot()
-        snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+        snapshot = _insight_snapshot()
         _last["insights"] = snapshot
     return web.json_response({"bike": _bike_addr, "locked": _locked_addr,
                               "tracker": _tracker_mac, "tracker_off": _tracker_off,

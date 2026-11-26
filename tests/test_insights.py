@@ -344,3 +344,14 @@ def test_malformed_saved_diagnostic_container_does_not_break_panel(tmp_path):
     path = tmp_path / 'i.json'
     path.write_text(json.dumps({'local': [], 'components': [], 'changes': [], 'trends': None}))
     assert Insights(str(path)).snapshot(now=DAY)['components'] == {}
+
+
+def test_restored_service_distance_is_shared_without_freshness_claim(r, fake_mqtt):
+    r._ensure_insights()
+    r._last['next_service'] = 177
+    r._publish_insights()
+    snapshot = r._last['insights']
+    assert snapshot['service_soon'] is True
+    assert snapshot['service_remaining_km'] == 177
+    assert snapshot['connection']['last_success'] is None
+    assert r._insights.history.samples == []
