@@ -1,3 +1,12 @@
+# 2.69.0
+
+- Replace static Bluetooth icons and misleading connected badges with reader state, per-field ages and actionable connection help.
+- Choose tracker battery by the latest valid BLE/cloud timestamp; show refresh failures and retry without discarding last-known readings.
+- Share maintenance urgency between UI and HA (200 km or 14 estimated days); show service date, remaining rides and history basis.
+- Compact dashboard photo, add insight shortcuts, selectable rides and clear history coverage.
+- Persist daily battery-health/cycle trends, isolated on battery/bike replacement; display historical charts.
+- Expose tracker proxy reachability and explain its role; document active Bosch proxy requirements and hardware validation plan.
+
 # 2.68.4
 
 - Show the odometer as whole kilometres.

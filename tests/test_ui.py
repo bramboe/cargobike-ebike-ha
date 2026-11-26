@@ -127,6 +127,28 @@ async def test_interactive_insights_planning_filters_export_and_mobile(r, monkey
             page.on('pageerror', lambda err: errors.append(str(err)))
             await page.goto(f'http://127.0.0.1:{port}/')
             await page.wait_for_function("document.querySelector('.metric').textContent.includes('94')")
+            assert 'Recently read' in await page.locator('#conn').inner_text()
+            assert await page.locator('#refreshError').is_hidden()
+            assert 'Measurement time unknown' in await page.locator('#modeAge').inner_text()
+            r._last['tracker_battery'] = 70
+            r._last['tracker_updated'] = time.strftime('%Y-%m-%dT%H:%M:%S%z')
+            r._last['cloud'] = {'module_charge': 5, 'ts': '2020-01-01T00:00:00+0000'}
+            await page.evaluate('refresh()')
+            assert await page.locator('#gpsBatt').inner_text() == '70%'
+            assert 'Bluetooth' in await page.locator('#gpsUpd').inner_text()
+            r._last['insights']['trends'] = [
+                {'at': now - 86400, 'battery_soh': 95},
+                {'at': now, 'battery_soh': 94}]
+            await page.evaluate('refresh()')
+            assert await page.locator('#batteryTrends svg').count() == 1
+            assert await page.locator('#photoSummary').count() == 1
+            await page.route('**/api/status', lambda route: route.fulfill(status=503, body='Unavailable'))
+            await page.evaluate('refresh()')
+            assert await page.locator('#refreshError').is_visible()
+            assert await page.locator('#pct').inner_text() == '80%'
+            await page.unroute('**/api/status')
+            await page.locator('#refreshRetry').click()
+            await page.wait_for_function("document.querySelector('#refreshError').hidden")
             await page.locator('.metric').first.click()
             assert 'not a capacity test' in await page.locator('#metricDetail').inner_text()
             await page.get_by_role('tab', name='Maintenance', exact=True).click()
@@ -142,6 +164,10 @@ async def test_interactive_insights_planning_filters_export_and_mobile(r, monkey
             assert await page.locator('#scenarioKm').input_value() == '10'
             await page.get_by_role('tab', name='Rides', exact=True).click()
             assert await page.locator('#rideList tbody tr').count() == 2
+            await page.locator('#rideList .ride-select').first.click()
+            assert '10 km' in await page.locator('#rideDetail').inner_text()
+            await page.evaluate('refresh()')
+            assert await page.locator('#rideDetail').is_visible()
             await page.locator('#ridePeriod').select_option('7')
             assert await page.locator('#rideList tbody tr').count() == 1
             await page.locator('#rideKind').select_option('interval')

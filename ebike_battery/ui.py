@@ -1,4 +1,5 @@
 """Ingress dashboard; all untrusted values must be escaped or textContent."""
+from dashboard_ui import DASHBOARD_CSS, DASHBOARD_SCRIPT
 from insight_ui import INSIGHTS_CSS, INSIGHTS_HTML, INSIGHTS_SCRIPT
 
 INDEX_HTML = """<!doctype html><html><head><meta charset=utf-8>
@@ -105,6 +106,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
   <div style="text-align:center;margin-top:12px"><button class=sec data-i18n=ob_scan onclick="scan('bike','#obFound')">Zoek fiets</button></div>
 </div>
 
+<div id=refreshError role=status hidden><span id=refreshErrorText></span> <button type=button class=sec id=refreshRetry onclick="refresh()">Opnieuw proberen</button></div>
 <section id=dash class=dash>
   <div class='card hero col-wide'>
     <div class=htitle id=bikeTitle>Bosch eBike</div>
@@ -112,21 +114,21 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
     <span class=badge id=conn>—</span>
     <span class=badge id=cloudMatch style="display:none"></span>
     <div class=hstats>
-      <div class=hstat><div class=segs id=segs></div><div class=pct id=pct>—<small>%</small></div><span class=src title=Bluetooth>📶</span></div>
+      <div class=hstat><div class=segs id=segs></div><div class=pct id=pct>—<small>%</small></div></div>
       <div class=vr></div>
       <div><div class=range id=range>—<small> km</small></div><div class=hlbl data-i18n=ranges_short>bereik</div></div>
     </div>
-    <div class=bikewrap>
+    <div class=dashboard-shortcuts><button class=sec id=quickBattery onclick="openInsights('battery')"></button><button class=sec id=quickRides onclick="openInsights('rides')"></button><button class=sec id=quickConnection onclick="openInsights('connection')"></button></div><details class=bike-photo><summary id=photoSummary>Bekijk de fiets</summary><div class=bikewrap>
       <img class=bike src="bike.png" alt="Urban Arrow Family" />
     </div>
     <a class=reqlink id=reqPhoto data-i18n=request_photo target=_blank rel=noopener
-       href="https://github.com/bramboe/cargobike-ebike-ha/issues/new?title=Bike%20photo%20request&labels=bike-image&body=Model%20(Family%2FTender%2FCargo%2FFlatbed)%3A%20%0AType%2Fversion%20(e.g.%20Advanced%20Next)%3A%20%0AColour%3A%20%0AProduct%20photo%20URL%20(transparent%20PNG%20if%20possible)%3A%20">Andere fiets? Vraag je model aan</a>
+       href="https://github.com/bramboe/cargobike-ebike-ha/issues/new?title=Bike%20photo%20request&labels=bike-image&body=Model%20(Family%2FTender%2FCargo%2FFlatbed)%3A%20%0AType%2Fversion%20(e.g.%20Advanced%20Next)%3A%20%0AColour%3A%20%0AProduct%20photo%20URL%20(transparent%20PNG%20if%20possible)%3A%20">Andere fiets? Vraag je model aan</a></details>
   </div>
 
   <div class='rail col-rail'>
-    <div class=card><div class=lbl><span data-i18n=mode>Rijmodus</span><span class=src title=Bluetooth>📶</span></div><div class=between><div class=big id=mode>—</div><span class=pill id=modePill></span></div></div>
+    <div class=card><div class=lbl><span data-i18n=mode>Rijmodus</span></div><div class=between><div class=big id=mode>—</div><span class=pill id=modePill></span></div><div class=reading-age id=modeAge></div></div>
     <div class=card id=maintenanceCard><div class=lbl><span data-i18n=maint>Onderhoud</span></div><div class=service-notice id=serviceNotice></div><div class=big id=service>—</div><div class=sub data-i18n=maint_sub>tot de volgende servicebeurt</div><div class=sub id=serviceForecast></div><button type=button class=sec onclick="openInsights('maintenance')" id=planningOpen>Bekijk planning</button></div>
-    <div class=card><div class=lbl><span data-i18n=security>Beveiliging</span><span class=src title=Bluetooth>📶</span></div><div id=secLine class=big>—</div>
+    <div class=card><div class=lbl><span data-i18n=security>Beveiliging</span></div><div id=secLine class=big>—</div>
       <div class=armbtns id=armBox></div><div class=warn id=secWarn></div>
       <div class=sub id=lockLine style="margin-top:14px;font-size:14px"></div></div>
     <div class=card><div class=lbl data-i18n=gps>GPS-module &amp; locatie</div>
@@ -141,10 +143,10 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
       <div style="margin-top:14px"><button class=sec id=trkBtn data-i18n=refresh_module onclick="refreshTracker()">Module-accu verversen</button></div></div>
   </div>
 
-  <div class='card col-wide'><div class=lbl><span data-i18n=ranges>Geschat bereik per stand</span><span class=src title=Bluetooth>📶</span></div>
-    <div class=g4 id=ranges></div><div class=cbar id=rangeBar></div></div>
+  <div class='card col-wide'><div class=lbl><span data-i18n=ranges>Geschat bereik per stand</span></div>
+    <div class=g4 id=ranges></div><div class=cbar id=rangeBar></div><div class=reading-age id=rangeAge></div></div>
 
-  <div class='card col-wide'><div class=lbl><span data-i18n=mileage>Kilometerstand</span><span class=src title=Bluetooth>📶</span></div><div class=big id=odo>—</div></div>
+  <div class='card col-wide'><div class=lbl><span data-i18n=mileage>Kilometerstand</span></div><div class=big id=odo>—</div></div>
 
 <!-- INSIGHT_PANELS -->
   <div class='card col-wide' id=boschCard style="display:none"><div class=lbl><span data-i18n=bosch_h>Accu &amp; service</span><span class=src title="Bosch cloud">☁️</span></div>
@@ -153,7 +155,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
   <div class='card col-wide' id=actCard style="display:none"><div class=lbl><span data-i18n=activities>Activiteiten</span><span class=src title=Cloud>☁️</span></div>
     <div id=actList></div></div>
 
-  <div class='col-wide muted' style="font-size:12px;text-align:center">📶 Bluetooth · ☁️ Cloud</div>
+  <div class='col-wide muted' style="font-size:12px;text-align:center">Bluetooth-metingen · Bron en meettijd via de details</div>
 </section>
 
 <section id=more class='set hidden'>
@@ -225,7 +227,7 @@ const $=s=>document.querySelector(s);
 // HTML-escape anything that isn't ours (BLE names, HA entity names, cloud fields)
 // before it goes into innerHTML: this page runs inside Home Assistant's origin.
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const api=async(p,o)=>(await fetch(p,o)).json();
+const api=async(p,o={})=>{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),p==='api/status'?10000:60000);try{const response=await fetch(p,{...o,signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();if(data&&data.ok===false)throw new Error('Request failed');return data;}finally{clearTimeout(timer);}};
 const post=(p,b)=>api(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});
 const LANG=(navigator.language||'en').toLowerCase().startsWith('nl')?'nl':'en';
 const T={nl:{tab_dash:'Dashboard',tab_more:'Meer info',tab_set:'Instellingen',components:'Componenten',about:'Over deze add-on',about_p:'Leest je Bosch Smart System eBike (Kiox) via Bluetooth uit en publiceert batterij, bereik, modus, km-stand, beurt, beweging/alarm en tracker naar Home Assistant.',about_repo:'Broncode op GitHub',c_drive:'Aandrijving',c_batt:'Accu',c_disp:'Display',c_hub:'Hub',mode:'Rijmodus',maint:'Onderhoud',maint_sub:'tot de volgende servicebeurt',security:'Beveiliging',ranges:'Geschat bereik per stand',mileage:'Kilometerstand',tech:'Technische info',tech_kiox:'Kiox (Bosch-hub)',tech_gps:'GPS-module',t_model:'Model',t_frame:'Framenummer',devmode:'🛠️ Beweegtest staat AAN — bewaking en uitlezen pauzeren. Zet Beweegtest (ontwikkelaar) uit in de configuratie als je klaar bent.',gps:'GPS-module & locatie',gps_conn:'verbonden',in_range:'in bereik',out_range:'buiten bereik',ob_title:'Voeg je fiets toe',ob_body:"Zet het display van de fiets aan (en in koppelmodus) — dan verschijnt 'ie hieronder.",ob_scan:'Zoek fiets',add_bike:'Toevoegen',adding:'Toevoegen…',replace_bike:'Andere fiets koppelen',ob_btn:'Naar Instellingen',remove_bike:'Verwijder fiets',remove_confirm_btn:'Bevestig verwijderen',remove_confirm:'⚠️ Weet je het zeker? Klik nogmaals om te wissen.',removed_ok:'Verwijderd ✓',lk_on:'🔒 Vergrendeld',lk_off:'🔓 Ontgrendeld',refresh_module:'Module-accu verversen',refreshing:'verversen…',t_pname:'Productnaam',t_color:'Kleur',t_part:'Onderdeelnummer',t_sku:'Artikelcode',t_pcode:'Productcode',t_hubfw:'Firmware',t_modfw:'Firmware',t_addr:'Bluetooth-adres',t_mac:'MAC-adres',t_mfr:'Fabrikant',t_hw:'Hardware',t_batt:'Module-accu',t_gps:'GPS-coördinaten',legal:'Onofficiële, door de community gemaakte integratie. Niet gelieerd aan, goedgekeurd of ondersteund door Bosch eBike Systems of Urban Arrow. Gebruik volledig op eigen risico, zonder enige garantie. Alle merknamen zijn eigendom van hun respectievelijke eigenaren.',su_bike_h:'1. Fiets',su_bike_p:"Zet het display van de fiets aan en zoek 'm.",scan_bikes:'Scan fietsen',select_bike:'Selecteer deze fiets',su_pair_p:'Zet de fiets in pairing mode (display → nieuw apparaat koppelen), klik dan:',pair_btn:'Koppel (pair)',su_tracker_h:'2. GPS-tracker (anti-diefstal, optioneel)',su_tracker_p:"De tracker is altijd aan. Scan en kies 'm, of sla over.",scan_trackers:'Scan trackers',skip:'Overslaan / uit',select_tracker:'Selecteer deze tracker',su_alarm_h:'3. Alarm (optioneel — vereist de tracker)',su_alarm_p:'Afwezig = hard (push + lampen), Thuis = stil (alleen melding). Uit = alleen de bewegingssensor.',conn_on:'Verbonden',conn_off:'Niet verbonden',no_reading:'nog geen meting',up_now:'zojuist bijgewerkt',up_min:'bijgewerkt {n} min geleden',up_hour:'bijgewerkt {n} uur geleden',up_day:'bijgewerkt {n} d geleden',motion_y:'beweging',motion_n:'rustig',alarm_off:'Alarm uit',s_disarmed:'Uit',s_home:'Stil',s_away:'Vol alarm',s_trig:'⚠️ GEACTIVEERD',a_off:'Uit',a_home:'Stil',a_away:'Vol alarm',alarm_off_hint:'Alarm staat uit (zie Instellingen)',alarm_enable:'Alarm inschakelen',alarm_disable:'Alarm uitschakelen',now_off:'momenteel uit',now_on:'momenteel aan',scanning:'scannen… (±8s)',nothing:'niets gevonden — staat het apparaat aan/in bereik?',pairing:'koppelen…',paired_ok:'Gekoppeld ✓',paired_fail:'Mislukt — staat de fiets in pairing mode?',request_photo:'Andere fiets? Vraag je kleur/model aan',sec_passive:'🛡️ Passieve bewaking: de add-on luistert alleen naar de GPS-module (geen verbinding, geen extra accuverbruik). Staat het alarm scherp, dan luistert hij vrijwel continu en gaat het alarm af zodra de module {n} s niet meer gehoord wordt. Zegt de GPS dat de fiets weg is, dan pauzeert het luisteren tot hij weer thuis is.',ext_h:'Externe bewegingssensor (op de fiets)',ext_p:'Kies een eigen Home Assistant-sensor (contact-, trillings- of bewegingssensor) die je op de fiets monteert. Gaat die aan, dan telt dat als beweging en gaat — als het alarm scherp staat — het alarm af. Werkt los van Bluetooth.',ext_save:'Opslaan',ext_none:'— Geen —',saved_ok:'Opgeslagen ✓',sens_h:'Sensoren',sens_p:'Elke bron die beweging of diefstal kan melden — de ingebouwde fietssensoren én je eigen HA-sensoren — staat hier als een rij die je apart aan/uit zet, met dezelfde opties.',sens_add:'+ Sensor toevoegen',sens_pick:'Kies een sensor…',s_presence:'Nabijheid tracker (buiten bereik)',s_ext:'Externe sensor',o_role:'Rol:',role_alarm:'Alarm',role_motion:'Alleen beweging',o_alwayson:'Altijd aan (ook als alarm uit)',o_unavail:'Onbereikbaar = sabotage',o_invert:'Omkeren',o_dbl:'Dubbele controle',m_silent:'Stil',m_loud:'Vol alarm',entry_delay:'Ingangsvertraging',exit_delay:'Uitgangsvertraging',sens_delay_hint:'Uitgang = tijd na scherpzetten voordat sensoren tellen (wegrijden). Ingang = genadetijd voordat het alarm echt afgaat.',dbl_win:'Venster dubbele controle',dbl_hint:'Sensoren met “Dubbele controle” laten het alarm pas afgaan als er minstens twee binnen dit venster samen bevestigen.',st_unavail:'onbereikbaar',cloud:'Cloud (PON)',cloud_charge:'Module-lading (cloud)',cloud_loc:'Locatie',cl_moving:'Rijdt',cl_parked:'Geparkeerd',cloud_home:'Afstand tot huis',at_home:'Thuis',away:'Onderweg',mb_in:'Hoofdaccu erin (module laadt)',mb_out:'Hoofdaccu eruit (module op eigen accu)',bosch_h:'Accu & service',b_soh:'Gezondheid',b_cycles:'Laadcycli',b_energy:'Geleverd',b_motor:'Motor-uren',b_service:'Volgende beurt',b_sw:'Software',cloud_accounts:'Cloud-accounts',acc_ble:'Bluetooth (live)',acc_pon:'PON (locatie/GPS)',acc_bosch:'Bosch (diagnostiek)',acc_linked:'gekoppeld ✓',acc_off:'niet ingesteld',acc_hint:'Live data komt via Bluetooth (scan hieronder). Diagnostiek en locatie komen via je Bosch/PON-account (add-on-instellingen) — die fiets wordt automatisch gekoppeld, zonder scan.',your_bike:'jouw geregistreerde fiets',registered:'geregistreerd',acc_checking:'controleren…',activities:'Activiteiten',act_ride_start:'Rit gestart',act_ride_stop:'Rit gestopt',act_left_home:'Vertrokken van huis',act_arrived_home:'Thuisgekomen',act_moved:'Verplaatst',act_none:'nog geen activiteit geregistreerd',ranges_short:'bereik',same_dist:'zelfde afstand als je fiets — waarschijnlijk van jou'},
@@ -326,7 +328,7 @@ const fresh=iso=>{const ts=Date.parse(iso);return !isNaN(ts)&&(Date.now()-ts)<15
 const fmtDist=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(1)+' km';
 /* INSIGHT_LOGIC */
 
-async function refresh(){const s=await api('api/status');const L=s.last||{};const di=L.device_info||{};const dev=s.device||{};const R=L.range||{};
+async function refreshData(){const s=await api('api/status');const L=s.last||{};const di=L.device_info||{};const dev=s.device||{};const R=L.range||{};
   renderInsights(L.insights,L.next_service);applyMaintenancePreference(s.show_maintenance!==false);
   window._added=!s.bike_off&&!!(L.last_updated||L.frame_number||s.bike||s.locked);
   window._bikeAddr=s.bike||L.address||'';rt();
@@ -352,7 +354,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   $('#ranges').innerHTML=order.map(([k,n])=>`<div><div class=m style="color:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#555'}">${n}</div><div class=v>${esc(R[k]??'—')}<small> km</small></div></div>`).join('');
   const rsum=order.reduce((a,[k])=>a+(R[k]||0),0)||1;
   $('#rangeBar').innerHTML=order.map(([k,n])=>`<i style="width:${(R[k]||0)/rsum*100}%;background:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#999'}"></i>`).join('');
-  $('#service').textContent=L.next_service!=null?Math.round(L.next_service)+' km':'—';
+  const remainingService=L.insights&&finite(L.insights.service_remaining_km)?L.insights.service_remaining_km:L.next_service;$('#service').textContent=finite(remainingService)?Math.max(0,Math.round(remainingService))+' km':'—';
   $('#odo').textContent=L.odometer!=null?Math.round(L.odometer).toLocaleString('nl-NL')+' km':'—';
   // technical info — Kiox (Bosch hub) vs GPS module, separate devices/MACs
   const dl=rows=>{const r=rows.filter(([k,v])=>v!=null&&v!=='');return r.length
@@ -403,9 +405,10 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
     '</dl>';
   // GPS module card (rail)
   // one module-battery %: cloud preferred, BLE as backup
-  const cloudC=(L.cloud&&L.cloud.module_charge!=null)?L.cloud.module_charge:null;
-  const tbv=(cloudC!=null)?cloudC:L.tracker_battery;
-  const battSrc=(cloudC!=null)?'<span class=src title=Cloud>☁️</span>':(L.tracker_battery!=null?'<span class=src title=Bluetooth>📶</span>':'');
+  const chosenTracker=trackerReading(L);
+  const cloudC=chosenTracker&&chosenTracker.source!=='Bluetooth'?chosenTracker.value:null;
+  const tbv=chosenTracker?chosenTracker.value:null;
+  const battSrc=(cloudC!=null)?'<span class=src title=Cloud>☁️</span>':(L.tracker_battery!=null?'':'');
   $('#gpsBatt').innerHTML=esc(tbv!=null?tbv:'—')+'<small>%</small>'+battSrc;
   const gUpd=(cloudC!=null)?(L.cloud&&L.cloud.ts):L.tracker_updated;
   $('#gpsUpd').textContent=gUpd?ago(gUpd):t('no_reading');
@@ -465,7 +468,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   // settings tab bits
   window._alarmOff=s.alarm_off;
   $('#alarmBtn').textContent=t(s.alarm_off?'alarm_enable':'alarm_disable');
-  $('#alarmState').textContent=t(s.alarm_off?'now_off':'now_on');}
+  $('#alarmState').textContent=t(s.alarm_off?'now_off':'now_on');renderDashboardState(s);}
 async function arm(cmd){await post('api/alarm',{cmd});refresh()}
 async function toggleAlarm(){await post('api/set_alarm',{on:window._alarmOff===true});refresh()}
 const fmt=d=>`${d.address} · ${d.rssi} dBm`+(d.module_mac?` · ${d.module_mac}`:'');
@@ -531,5 +534,5 @@ applyI18n();refresh();setInterval(refresh,5000);
 
 
 INDEX_HTML = (INDEX_HTML.replace("<!-- INSIGHT_PANELS -->", INSIGHTS_HTML)
-              .replace("</style>", INSIGHTS_CSS + "</style>", 1)
-              .replace("/* INSIGHT_LOGIC */", INSIGHTS_SCRIPT))
+              .replace("</style>", INSIGHTS_CSS + DASHBOARD_CSS + "</style>", 1)
+              .replace("/* INSIGHT_LOGIC */", INSIGHTS_SCRIPT + DASHBOARD_SCRIPT))

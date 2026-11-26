@@ -75,7 +75,8 @@ not an invented Wh/km conversion. A charging increase invalidates consumption
 for that interval. Odometer rollbacks, impossible jumps and out-of-order samples
 are rejected. A new selected bike starts new history.
 
-The Service due soon binary sensor activates at 200 km remaining. Days/weeks,
+The Service due soon binary sensor and panel activate at 200 km remaining or
+14 estimated days, using the same snapshot. Unknown service distance stays unknown. Days/weeks,
 forecast diagnostics, mean observed ride distance and frequency are available as
 MQTT entities for notifications. The forecast sensor attributes include the
 method, sample duration, ride quality and recent history. Configure HA
@@ -166,3 +167,40 @@ BES3 address/scaling facts are attributed to
 CC BY 4.0. The implementation adds no bike setting writes, RPCs or firmware tools.
 
 This is unofficial community software, not affiliated with Bosch or Urban Arrow.
+
+## Dashboard freshness and battery trends
+
+The reader connects briefly and disconnects after each snapshot. The badge reports
+reader state, not a permanent BLE link. Ride mode and range retain their own
+successful measurement timestamps; a successful battery read does not renew them.
+Older persisted values without timestamps show “Measurement time unknown”.
+Tracker battery source selection prefers the latest timestamped valid percentage;
+undated sources are used only when no dated source is available. API errors leave
+last-known values visible with an explicit error and retry button.
+
+Fresh diagnostic battery-health and cycle readings are stored once per UTC day,
+for up to two years. Missing/denied values never create trend samples. Battery
+replacement clears battery trends, and selecting another bike clears all history.
+The chart requires at least two measurement days and does not invent past data.
+Ride rows and graph bars open details; filters and selection survive refresh.
+
+## Why the proxy currently listens only
+
+ESPHome supports active GATT connections and its API exposes connect, pair,
+read/write and notify operations. Our add-on currently subscribes only to BLE
+advertisements for tracker presence. Its Bosch reader and pairing code use local
+BlueZ/Bleak. An ESPHome proxy is not a transparent replacement for that adapter.
+The panel reports proxy API reachability separately from the last tracker advert.
+
+To support Bosch bike data remotely, a transport adapter must implement the
+same GATT read/write/notify interface over aioesphomeapi, route pairing to the
+ESP32, check firmware/active connection capabilities and free slots, and serialize
+reads with other proxy clients. Existing local BlueZ bonds do not establish that
+the ESP32 is bonded. Validate on hardware: pair while bike is in pairing mode,
+read eb21 and notifications, reconnect after bike/proxy/HA restart, recover slots
+after timeout, coexist with Flow, and preserve independent tracker guarding.
+No runtime bike-data proxy mode is advertised until these checks pass.
+
+Primary references:
+- https://esphome.io/components/bluetooth_proxy/
+- https://github.com/esphome/aioesphomeapi/blob/main/aioesphomeapi/client.py

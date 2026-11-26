@@ -22,8 +22,14 @@ class Insights:
             saved = {}
         self.history = RideHistory(saved.get("history"))
         self.local = saved.get("local", {})
+        if not isinstance(self.local, dict):
+            self.local = {}
+        self.local = {k: v for k, v in self.local.items() if k == "capabilities" or isinstance(v, dict)}
         self.components = saved.get("components", {})
-        self.changes = saved.get("changes", [])[-50:]
+        if not isinstance(self.components, dict):
+            self.components = {}
+        self.trends = [v for v in saved.get("trends", []) if isinstance(v, dict) and number(v.get("at")) is not None] if isinstance(saved.get("trends", []), list) else []
+        self.changes = saved.get("changes", [])[-50:] if isinstance(saved.get("changes", []), list) else []
         self.connection = {"state": "starting", "last_success": None, "error": None}
         self.remaining = number(saved.get("remaining"))
         self.service_target = number(saved.get("service_target"))
@@ -38,6 +44,7 @@ class Insights:
         self.history.reset(identity)
         self.local, self.components, self.changes, self.remaining = {}, {}, [], None
         self.service_target = None
+        self.trends = []
         self.connection = {"state": "starting", "last_success": None, "error": None}
         self.save(force=True)
 
@@ -69,6 +76,7 @@ class Insights:
                 self.components[name] = {}
                 if name == "battery":
                     # A replacement pack must not inherit the old pack's health.
+                    self.trends = []
                     self.local = {k: v for k, v in self.local.items()
                                   if not k.startswith("battery_")}
             elif previous.get("firmware") and new.get("firmware") and previous["firmware"] != new["firmware"]:
@@ -87,6 +95,17 @@ class Insights:
                 self.local[key] = {"value": None, "at": now, "source": "ble", "status": status}
         self.local["capabilities"] = result.get("capabilities", {})
         self.changes = self.changes[-50:]
+        point = {"at": now}
+        for key in ("battery_soh", "battery_cycles"):
+            reading = self.local.get(key, {})
+            if reading.get("at") == now and number(reading.get("value")) is not None:
+                point[key] = reading["value"]
+        if len(point) > 1:
+            if self.trends and int(self.trends[-1]["at"] // 86400) == int(now // 86400):
+                self.trends[-1] = {**self.trends[-1], **point}
+            else:
+                self.trends.append(point)
+            self.trends = [p for p in self.trends if p["at"] >= now - 730 * 86400][-730:]
 
     def snapshot(self, *, now=None):
         now = time.time() if now is None else now
@@ -110,9 +129,9 @@ class Insights:
         if state == "reading_ok" and last is not None and now - last > 600:
             state = "stale"
         return {**values, **{k: stats[k] for k in ("service_days", "service_weeks", "service_rides", "km_per_ride", "rides_per_week", "km_per_day")},
-                "service_remaining_km": self.remaining, "service_soon": self.remaining is not None and self.remaining <= 200,
+                "service_remaining_km": self.remaining, "service_soon": (self.remaining <= 200 or (number(stats["service_days"]) is not None and stats["service_days"] <= 14)) if self.remaining is not None else None,
                 "forecast": stats, "readings": details, "components": self.components,
-                "component_changes": self.changes, "capabilities": self.local.get("capabilities", {}),
+                "trends": self.trends, "component_changes": self.changes, "capabilities": self.local.get("capabilities", {}),
                 "connection": {**self.connection, "state": state,
                                "age_seconds": round(max(0, now - last)) if last is not None else None},
                 "thresholds": self.thresholds, "source": "ble"}
@@ -123,7 +142,7 @@ class Insights:
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"history": self.history.export(), "local": self.local,
-                       "components": self.components, "changes": self.changes,
+                       "components": self.components, "changes": self.changes, "trends": self.trends,
                        "remaining": self.remaining, "service_target": self.service_target}, f)
             f.flush()
             os.fsync(f.fileno())
