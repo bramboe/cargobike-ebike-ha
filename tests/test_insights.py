@@ -305,3 +305,53 @@ def test_retained_reading_for_old_bike_does_not_repopulate_selection(r, monkeypa
     assert r._last == {}
     r._handle_mqtt_message(r.STATE_TOPIC, json.dumps({"address": "BB:BB:BB:BB:BB:BB", "battery": 80}))
     assert r._last["battery"] == 80
+
+
+def test_maintenance_urgency_uses_days_and_preserves_unknown(tmp_path, monkeypatch):
+    i = Insights(str(tmp_path / 'i.json'))
+    assert i.snapshot(now=DAY)['service_soon'] is None
+    i.observe({'next_service': 300}, now=DAY)
+    summary = i.history.summary
+    monkeypatch.setattr(i.history, 'summary', lambda remaining, now: {
+        **summary(remaining, now=now), 'service_days': 10, 'service_weeks': 1.4})
+    assert i.snapshot(now=DAY)['service_soon'] is True
+    monkeypatch.setattr(i.history, 'summary', summary)
+    assert i.snapshot(now=DAY)['service_soon'] is False
+
+
+def test_daily_battery_trends_persist_without_fabrication_and_reset(tmp_path):
+    path = str(tmp_path / 'i.json')
+    i = Insights(path)
+    def observe(at, value=94, serial='A', status='available'):
+        i.enrich({'source': 'ble', 'measured_at': at,
+                  'values': {'battery_soh': value}, 'capabilities': {'00d8': status},
+                  'components': {'battery': {'serial': serial}}})
+    observe(DAY)
+    observe(DAY + 100, 93)
+    observe(2 * DAY, 93)
+    observe(3 * DAY, status='denied')
+    assert len(i.trends) == 2
+    assert i.trends[0]['battery_soh'] == 93
+    i.save(force=True)
+    assert Insights(path).trends == i.trends
+    observe(4 * DAY, 100, serial='B')
+    assert len(i.trends) == 1 and i.trends[0]['battery_soh'] == 100
+    i.reset('new-bike')
+    assert i.trends == []
+
+
+def test_malformed_saved_diagnostic_container_does_not_break_panel(tmp_path):
+    path = tmp_path / 'i.json'
+    path.write_text(json.dumps({'local': [], 'components': [], 'changes': [], 'trends': None}))
+    assert Insights(str(path)).snapshot(now=DAY)['components'] == {}
+
+
+def test_restored_service_distance_is_shared_without_freshness_claim(r, fake_mqtt):
+    r._ensure_insights()
+    r._last['next_service'] = 177
+    r._publish_insights()
+    snapshot = r._last['insights']
+    assert snapshot['service_soon'] is True
+    assert snapshot['service_remaining_km'] == 177
+    assert snapshot['connection']['last_success'] is None
+    assert r._insights.history.samples == []

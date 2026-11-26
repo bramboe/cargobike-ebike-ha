@@ -38,6 +38,7 @@ from bleak import BleakClient, BleakScanner
 
 from alarm_state import restore_state
 from ble_diagnostics import DiagnosticReader
+from history import number
 from insights import Insights
 from mqtt_insights import publish as publish_insights_discovery
 from telemetry import (_pb_fields as _pb_fields, parse_eb21 as parse_eb21,
@@ -202,7 +203,7 @@ def _save_cfg() -> None:
 # must reset to off on restart rather than wrongly read "connected".
 LAST_FILE = "/data/last.json"
 _PERSIST_KEYS = (
-    "battery", "last_updated", "address", "odometer", "next_service",
+    "battery", "last_updated", "address", "odometer", "next_service", "mode_updated", "range_updated",
     "frame_number", "hub_firmware", "part_number", "model_number",
     "max_torque", "max_power", "speed_limit",
     "module_firmware", "lock_label", "mode", "range", "bike_model", "bike_brand",
@@ -732,11 +733,20 @@ def _ensure_insights():
     return _insights
 
 
+def _insight_snapshot():
+    # A restored BLE service distance remains useful even before the first new
+    # read after an upgrade. Do not mark it fresh or manufacture ride history.
+    if _insights.remaining is None:
+        _insights.remaining = number(_last.get("next_service"))
+    snapshot = _insights.snapshot()
+    snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+    return snapshot
+
+
 def _publish_insights():
     if _insights is None:
         return
-    snapshot = _insights.snapshot()
-    snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+    snapshot = _insight_snapshot()
     _last["insights"] = snapshot
     if _mqtt is not None:
         _mqtt.publish(INSIGHTS_TOPIC, json.dumps(snapshot), retain=True)
@@ -1833,10 +1843,12 @@ async def read_snapshot(mqtt_client: mqtt.Client, device) -> bool:
         _publish_insights()
     _last["bonded"] = True
     if mode is not None:
+        _last["mode_updated"] = now
         mqtt_client.publish(MODE_TOPIC, json.dumps({"mode": mode}), retain=True)
         log.info("ride mode: %s", mode)
         _last["mode"] = mode
     if ranges is not None:
+        _last["range_updated"] = now
         mqtt_client.publish(RANGE_TOPIC, json.dumps(ranges), retain=True)
         log.info("range km: %s", ranges)
         _last["range"] = ranges
@@ -1935,7 +1947,6 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
         try:
             if _bike_off:                     # bike removed — pause until re-added
                 _connection("no_bike")
-                _connection("no_bike")
                 publish_status("No bike added", "OFF")
                 await asyncio.sleep(4)
                 continue
@@ -1950,7 +1961,6 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
             if device is None:
                 fails = 0
                 _connection("off_or_out_of_range")
-                _connection("off_or_out_of_range")
                 publish_status("Bike not found (off or out of range)", "OFF")
             elif time.time() - last_ok < COOLDOWN:
                 # Seen recently; wait out the cooldown before reading again.
@@ -1960,6 +1970,7 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
                 # A nearby eBike we couldn't pair with (a neighbour's) — skip it.
                 publish_status("Ignoring an unknown nearby eBike", "OFF")
             else:
+                _connection("connecting")
                 log.info("bike seen — connecting to read")
                 if not await ensure_bonded(device.address):
                     _connection("pairing_required")
@@ -1975,6 +1986,7 @@ async def ble_loop(mqtt_client: mqtt.Client) -> None:
                     # Bike is on -> refresh the tracker's own battery too (low-power).
                     await read_tracker_battery()
                 else:
+                    _connection("read_failed", "No usable battery snapshot received")
                     fails += 1
         except Exception as err:  # noqa: BLE001
             fails += 1
@@ -2293,6 +2305,9 @@ def _proxy_adv_is_tracker(adv) -> bool:
     return ("urbanarrow" in nm) and not _tracker_mac
 
 
+_proxy_connected = False
+
+
 async def proxy_presence_loop() -> None:
     """Optional: subscribe to a remote ESPHome Bluetooth proxy and feed the presence
     layer when it hears our tracker. Extends 'in range' coverage with zero module
@@ -2334,14 +2349,18 @@ async def proxy_presence_loop() -> None:
                         zeroconf_instance=azc.zeroconf)
 
         async def on_connect() -> None:
+            global _proxy_connected
             try:
                 # Returns an unsubscribe callable (not awaitable).
                 cli.subscribe_bluetooth_le_advertisements(on_adv)
+                _proxy_connected = True
                 log.info("BLE proxy connected: %s:%s", _PROXY_HOST, _PROXY_PORT)
             except Exception as err:  # noqa: BLE001
                 log.warning("BLE proxy subscribe failed: %s", err)
 
         async def on_disconnect(expected: bool) -> None:
+            global _proxy_connected
+            _proxy_connected = False
             log.info("BLE proxy disconnected (%s)", _PROXY_HOST)
 
         reconnect = ReconnectLogic(client=cli, on_connect=on_connect,
@@ -2988,8 +3007,7 @@ def _log_module_report(entry: dict) -> None:
 
 async def _ui_status(_request):
     if _insights is not None:
-        snapshot = _insights.snapshot()
-        snapshot["receiver_health"] = "unavailable" if _receiver_fault and time.time() - _proxy_alive_at > 30 else "ok"
+        snapshot = _insight_snapshot()
         _last["insights"] = snapshot
     return web.json_response({"bike": _bike_addr, "locked": _locked_addr,
                               "tracker": _tracker_mac, "tracker_off": _tracker_off,
@@ -3001,6 +3019,8 @@ async def _ui_status(_request):
                               "alarm_grace_s": int(PRESENCE_ALARM_GRACE),
                               "presence_mode": _pres["mode"],
                               "ble_proxy": bool(_PROXY_HOST and _PROXY_KEY),
+                              "proxy": {"configured": bool(_PROXY_HOST and _PROXY_KEY),
+                                        "connected": _proxy_connected, "role": "tracker_presence"},
                               "device": {"manufacturer": DEVICE["manufacturer"],
                                          "model": DEVICE["model"]},
                               "last": _last})
