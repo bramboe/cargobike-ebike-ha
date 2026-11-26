@@ -1,3 +1,7 @@
+# 2.68.3
+
+- Show the distance to service as whole kilometres and drop the Bluetooth icon from the Maintenance card.
+
 # 2.68.2
 
 - Use the restored BLE service distance for maintenance reminders when insight history is not ready yet.

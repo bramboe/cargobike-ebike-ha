@@ -125,7 +125,7 @@ button.sec{background:var(--chip);color:var(--ink)}button:disabled{opacity:.5;cu
 
   <div class='rail col-rail'>
     <div class=card><div class=lbl><span data-i18n=mode>Rijmodus</span><span class=src title=Bluetooth>📶</span></div><div class=between><div class=big id=mode>—</div><span class=pill id=modePill></span></div></div>
-    <div class=card id=maintenanceCard><div class=lbl><span data-i18n=maint>Onderhoud</span><span class=src title=Bluetooth>📶</span></div><div class=service-notice id=serviceNotice></div><div class=big id=service>—</div><div class=sub data-i18n=maint_sub>tot de volgende servicebeurt</div><div class=sub id=serviceForecast></div><button type=button class=sec onclick="openInsights('maintenance')" id=planningOpen>Bekijk planning</button></div>
+    <div class=card id=maintenanceCard><div class=lbl><span data-i18n=maint>Onderhoud</span></div><div class=service-notice id=serviceNotice></div><div class=big id=service>—</div><div class=sub data-i18n=maint_sub>tot de volgende servicebeurt</div><div class=sub id=serviceForecast></div><button type=button class=sec onclick="openInsights('maintenance')" id=planningOpen>Bekijk planning</button></div>
     <div class=card><div class=lbl><span data-i18n=security>Beveiliging</span><span class=src title=Bluetooth>📶</span></div><div id=secLine class=big>—</div>
       <div class=armbtns id=armBox></div><div class=warn id=secWarn></div>
       <div class=sub id=lockLine style="margin-top:14px;font-size:14px"></div></div>
@@ -352,7 +352,7 @@ async function refresh(){const s=await api('api/status');const L=s.last||{};cons
   $('#ranges').innerHTML=order.map(([k,n])=>`<div><div class=m style="color:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#555'}">${n}</div><div class=v>${esc(R[k]??'—')}<small> km</small></div></div>`).join('');
   const rsum=order.reduce((a,[k])=>a+(R[k]||0),0)||1;
   $('#rangeBar').innerHTML=order.map(([k,n])=>`<i style="width:${(R[k]||0)/rsum*100}%;background:${MC[n=='TOUR+'?'Tour+':n[0]+n.slice(1).toLowerCase()]||'#999'}"></i>`).join('');
-  $('#service').textContent=L.next_service!=null?L.next_service+' km':'—';
+  $('#service').textContent=L.next_service!=null?Math.round(L.next_service)+' km':'—';
   $('#odo').textContent=L.odometer!=null?L.odometer.toLocaleString('nl-NL')+' km':'—';
   // technical info — Kiox (Bosch hub) vs GPS module, separate devices/MACs
   const dl=rows=>{const r=rows.filter(([k,v])=>v!=null&&v!=='');return r.length
